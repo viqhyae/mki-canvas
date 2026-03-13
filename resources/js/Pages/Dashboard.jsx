@@ -481,6 +481,9 @@ export default function Dashboard({ databaseBrands }) {
     ]);
 
     const [brands, setBrands] = useState(databaseBrands || []);
+    useEffect(() => {
+        setBrands(databaseBrands || []);
+    }, [databaseBrands]);
 
     const [categories, setCategories] = useState(INITIAL_CATEGORY_DATA);
 
@@ -622,21 +625,46 @@ export default function Dashboard({ databaseBrands }) {
     };
 
     const handleSaveBrand = (e) => {
-        e.preventDefault(); // Mencegah halaman refresh
+        e.preventDefault();
+        // Cegah simpan kalau nama kosong
+        if (!brandInput.name) return;
 
-        // Asumsi nama state form Anda adalah 'newBrand' (sesuaikan dengan kode Anda)
-        router.post(route('brands.store'), {
-            name: newBrand.name,
-            brand_code: newBrand.code,
-            owner_name: newBrand.owner,
-            description: newBrand.description
-        }, {
-            onSuccess: () => {
-                // Jika sukses masuk database, tutup modal dan reset form
-                setShowAddModal(false);
-                // setBrands tidak perlu dipanggil manual, karena Inertia otomatis merefresh 'databaseBrands'
-            }
-        });
+        if (editingBrandId) {
+            // --- FITUR EDIT (Memori Sementara) ---
+            setBrands(brands.map(b => b.id === editingBrandId ? {
+                ...b,
+                name: brandInput.name,
+                description: brandInput.description || "-",
+                ownerId: brandInput.ownerId ? Number(brandInput.ownerId) : null
+            } : b));
+            showToast("Data brand berhasil diperbarui!");
+            setBrandInput({ name: '', description: '', ownerId: '' });
+            setEditingBrandId(null);
+            setIsBrandModalOpen(false);
+        } else {
+            // --- FITUR TAMBAH BARU (Masuk ke Database) ---
+            const randomCode = Math.floor(1000 + Math.random() * 9000);
+
+            // Kita kirim menggunakan variabel brandInput (bukan newBrand)
+            router.post('/brands', {
+                name: brandInput.name,
+                brand_code: `CL-${randomCode}`,
+                owner_name: brandInput.ownerId ? brandInput.ownerId.toString() : null,
+                description: brandInput.description || "-",
+            }, {
+                onSuccess: () => {
+                    showToast("Brand baru berhasil ditambahkan!");
+                    // Reset form kembali kosong
+                    setBrandInput({ name: '', description: '', ownerId: '' });
+                    setIsBrandModalOpen(false);
+                },
+                onError: (errors) => {
+                    // Munculkan error jika ditolak oleh Laravel
+                    alert("Gagal menyimpan! Error: " + JSON.stringify(errors));
+                    console.log("Error detail:", errors);
+                }
+            });
+        }
     };
 
     const handleEditBrand = (brand) => {

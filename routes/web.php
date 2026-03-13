@@ -26,9 +26,11 @@ Route::middleware('auth')->group(function () {
     Route::get('/profile', [ProfileController::class, 'edit'])->name('profile.edit');
     Route::patch('/profile', [ProfileController::class, 'update'])->name('profile.update');
     Route::delete('/profile', [ProfileController::class, 'destroy'])->name('profile.destroy');
-    
+
     // Rute API untuk menyimpan Brand baru
     Route::post('/brands', [BrandController::class, 'store'])->name('brands.store');
+    Route::post('/brands/update/{brand}', [BrandController::class, 'update'])->name('brands.update'); // Pakai POST untuk update gambar
+    Route::delete('/brands/{brand}', [BrandController::class, 'destroy'])->name('brands.destroy');
 });
 
-require __DIR__.'/auth.php';
+require __DIR__ . '/auth.php';
