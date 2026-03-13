@@ -670,9 +670,16 @@ export default function Dashboard({ databaseBrands }) {
         setBrandInput({
             name: brand.name,
             description: brand.description === "-" ? "" : brand.description,
-            ownerId: brand.ownerId || ''
+            // Menggunakan owner_name dari database (jika ada), atau ownerId
+            ownerId: brand.owner_name || brand.ownerId || ''
         });
         setEditingBrandId(brand.id);
+
+        // --- TAMBAHAN UNTUK MENAMPILKAN LOGO LAMA ---
+        setLogoPreview(brand.logo_url ? `/storage/${brand.logo_url}` : null);
+        setLogoFile(null); // Kosongkan file uplaod agar siap menerima file baru
+        // -------------------------------------------
+
         setIsBrandModalOpen(true);
     };
 
@@ -1103,8 +1110,20 @@ export default function Dashboard({ databaseBrands }) {
                     </div>
                     <button
                         onClick={() => {
-                            setEditingBrandId(null);
-                            setBrandInput({ name: '', description: '', ownerId: '' });
+                            // 1. Isi form dengan data teks yang lama
+                            setBrandInput({
+                                name: brand.name,
+                                description: brand.description || "",
+                                ownerId: brand.owner_name || ""
+                            });
+                            setEditingBrandId(brand.id);
+
+                            // 2. TAMPILKAN PREVIEW LOGO LAMA (Jika Ada)
+                            setLogoPreview(brand.logo_url ? `/storage/${brand.logo_url}` : null);
+
+                            // 3. Kosongkan file siap upload (karena kita belum memilih file baru)
+                            setLogoFile(null);
+
                             setIsBrandModalOpen(true);
                         }}
                         className="bg-[#C1986E] hover:bg-[#A37E58] text-white px-5 py-2.5 rounded-lg font-medium transition-all shadow-sm active:scale-95 text-sm flex items-center justify-center gap-2"
@@ -1144,8 +1163,17 @@ export default function Dashboard({ databaseBrands }) {
                                         <tr key={brand.id} className={`transition-colors ${brand.status === 'Aktif' ? 'hover:bg-slate-50' : 'bg-slate-50/50 grayscale-[20%]'}`}>
                                             <td className="px-6 py-4">
                                                 <div className="flex items-center gap-3">
-                                                    <div className="h-10 w-10 bg-slate-100 rounded-full flex items-center justify-center text-slate-400 overflow-hidden border border-slate-200">
-                                                        <ImageIcon size={18} />
+                                                    <div className="h-10 w-10 bg-slate-100 rounded-full flex items-center justify-center text-slate-400 overflow-hidden border border-slate-200 flex-shrink-0">
+                                                        {brand.logo_url ? (
+                                                            // object-cover memastikan gambar terpotong rapi menjadi 1:1 tanpa membuatnya gepeng
+                                                            <img
+                                                                src={`/storage/${brand.logo_url}`}
+                                                                alt="Logo"
+                                                                className="w-full h-full object-cover"
+                                                            />
+                                                        ) : (
+                                                            <ImageIcon size={18} />
+                                                        )}
                                                     </div>
                                                     <div>
                                                         <p className={`font-medium text-sm ${brand.status === 'Aktif' ? 'text-slate-800' : 'text-slate-500'}`}>{brand.name}</p>
