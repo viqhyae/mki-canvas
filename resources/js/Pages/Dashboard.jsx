@@ -1182,23 +1182,23 @@ export default function Dashboard({ databaseBrands }) {
                     </button>
                 </div>
 
-                <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-x-auto">
-                    <table className="w-full text-left whitespace-nowrap">
+                <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-x-auto [scrollbar-gutter:stable]">
+                    <table className="w-full min-w-[980px] table-fixed text-left whitespace-nowrap">
                         <thead className="bg-slate-50 border-b border-slate-200">
                             <tr>
-                                <th className="px-6 py-4 font-semibold text-slate-600 text-sm cursor-pointer hover:bg-slate-100 transition-colors group select-none" onClick={() => handleSortChange('name', brandSort, setBrandSort)}>
+                                <th className="w-[34%] px-6 py-4 font-semibold text-slate-600 text-sm cursor-pointer hover:bg-slate-100 transition-colors group select-none" onClick={() => handleSortChange('name', brandSort, setBrandSort)}>
                                     <div className="flex items-center gap-2">Info Brand <SortIcon columnKey="name" sortConfig={brandSort} /></div>
                                 </th>
-                                <th className="px-6 py-4 font-semibold text-slate-600 text-sm cursor-pointer hover:bg-slate-100 transition-colors group select-none" onClick={() => handleSortChange('owner', brandSort, setBrandSort)}>
+                                <th className="w-[24%] px-6 py-4 font-semibold text-slate-600 text-sm cursor-pointer hover:bg-slate-100 transition-colors group select-none" onClick={() => handleSortChange('owner', brandSort, setBrandSort)}>
                                     <div className="flex items-center gap-2">Pemilik (Brand Owner) <SortIcon columnKey="owner" sortConfig={brandSort} /></div>
                                 </th>
-                                <th className="px-6 py-4 font-semibold text-slate-600 text-sm cursor-pointer hover:bg-slate-100 transition-colors group select-none" onClick={() => handleSortChange('sku', brandSort, setBrandSort)}>
-                                    <div className="flex items-center gap-2">Jml SKU <SortIcon columnKey="sku" sortConfig={brandSort} /></div>
+                                <th className="w-[14%] px-6 py-4 font-semibold text-slate-600 text-sm cursor-pointer hover:bg-slate-100 transition-colors group select-none" onClick={() => handleSortChange('sku', brandSort, setBrandSort)}>
+                                    <div className="flex items-center gap-2">Jumlah SKU <SortIcon columnKey="sku" sortConfig={brandSort} /></div>
                                 </th>
-                                <th className="px-6 py-4 font-semibold text-slate-600 text-sm cursor-pointer hover:bg-slate-100 transition-colors group select-none" onClick={() => handleSortChange('status', brandSort, setBrandSort)}>
+                                <th className="w-[14%] px-6 py-4 font-semibold text-slate-600 text-sm cursor-pointer hover:bg-slate-100 transition-colors group select-none" onClick={() => handleSortChange('status', brandSort, setBrandSort)}>
                                     <div className="flex items-center gap-2">Status <SortIcon columnKey="status" sortConfig={brandSort} /></div>
                                 </th>
-                                <th className="px-6 py-4 font-semibold text-slate-600 text-sm text-center">Aksi</th>
+                                <th className="w-[14%] px-6 py-4 font-semibold text-slate-600 text-sm text-center">Aksi</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
@@ -1224,8 +1224,8 @@ export default function Dashboard({ databaseBrands }) {
                                                             <ImageIcon size={18} />
                                                         )}
                                                     </div>
-                                                    <div>
-                                                        <p className={`font-medium text-sm ${isBrandActive(brand.status) ? 'text-slate-800' : 'text-slate-500'}`}>{brand.name}</p>
+                                                    <div className="min-w-0">
+                                                        <p className={`font-medium text-sm truncate ${isBrandActive(brand.status) ? 'text-slate-800' : 'text-slate-500'}`}>{brand.name}</p>
                                                         <p className="text-[10px] text-slate-400 font-mono bg-slate-100 px-1.5 py-0.5 rounded inline-block mt-0.5">
                                                             {brand.brand_code || `ID-${brand.id}`}
                                                         </p>
@@ -1242,17 +1242,17 @@ export default function Dashboard({ databaseBrands }) {
                                                 )}
                                             </td>
                                             <td className="px-6 py-4">
-                                                <span className="bg-blue-50 text-blue-600 text-xs px-2.5 py-1 rounded-full font-medium">
+                                                <span className="inline-flex min-w-[90px] justify-center bg-blue-50 text-blue-600 text-xs px-2.5 py-1 rounded-full font-medium">
                                                     {productCount} Produk
                                                 </span>
                                             </td>
                                             <td className="px-6 py-4">
                                                 {isBrandActive(brand.status) ? (
-                                                    <span className="bg-green-100 text-green-700 text-xs px-2 py-1 rounded-full flex items-center gap-1 w-fit">
+                                                    <span className="inline-flex min-w-[94px] justify-center bg-green-100 text-green-700 text-xs px-2 py-1 rounded-full items-center gap-1">
                                                         <CheckCircle2 size={12} /> Aktif
                                                     </span>
                                                 ) : (
-                                                    <span className="bg-slate-200 text-slate-500 text-xs px-2 py-1 rounded-full flex items-center gap-1 w-fit">
+                                                    <span className="inline-flex min-w-[94px] justify-center bg-slate-200 text-slate-500 text-xs px-2 py-1 rounded-full items-center gap-1">
                                                         <X size={12} /> Non-aktif
                                                     </span>
                                                 )}
