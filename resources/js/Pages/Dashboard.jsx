@@ -54,6 +54,7 @@ import {
     Sparkles
 } from 'lucide-react';
 import { router } from '@inertiajs/react';
+import axios from 'axios';
 import { createPortal } from 'react-dom';
 // Import QRCode untuk generate QR berbasis Vektor (SVG)
 import { QRCodeSVG } from 'qrcode.react';
@@ -396,7 +397,7 @@ const LeafletMap = () => {
     );
 };
 
-export default function Dashboard({ databaseBrands }) {
+export default function Dashboard({ databaseBrands, databaseCategories }) {
     const [activeTab, setActiveTab] = useState('dashboard');
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
     const [isMasterDataOpen, setIsMasterDataOpen] = useState(true);
@@ -450,8 +451,11 @@ export default function Dashboard({ databaseBrands }) {
             title: "Keluar Sistem?",
             message: "Sesi Anda akan diakhiri dan harus login kembali untuk mengakses halaman ini. Lanjutkan?",
             onConfirm: () => {
-                showToast("Berhasil logout dari sistem!");
-                // Logika untuk redirect ke halaman login / hapus token ditempatkan di sini
+                router.post('/logout', {}, {
+                    onError: () => {
+                        showToast("Gagal logout. Silakan coba lagi.", "error");
+                    }
+                });
             }
         });
     };
@@ -480,12 +484,36 @@ export default function Dashboard({ databaseBrands }) {
         { id: 4, name: "Bapak Andi", email: "andi@mensgroom.id", role: "Brand Owner", status: "Aktif" }
     ]);
 
-    const [brands, setBrands] = useState(databaseBrands || []);
+    const normalizeBrandStatus = (status) => (
+        status === 1 || status === '1' || status === true || status === 'Aktif' ? 1 : 0
+    );
+    const getBrandStatusLabel = (status) => normalizeBrandStatus(status) === 1 ? 'Aktif' : 'Non-aktif';
+    const isBrandActive = (status) => normalizeBrandStatus(status) === 1;
+    const createEmptyBrandInput = () => ({ name: '', description: '', owner_name: '', status: 1 });
+    const getFirstErrorMessage = (errors, fallbackMessage) => {
+        const firstError = Object.values(errors || {})[0];
+        if (Array.isArray(firstError)) return firstError[0] || fallbackMessage;
+        return firstError || fallbackMessage;
+    };
+    const normalizeBrandRecord = (brand) => ({
+        ...brand,
+        owner_name: brand.owner_name || '',
+        description: brand.description || '',
+        status: normalizeBrandStatus(brand.status),
+        brand_code: brand.brand_code || brand.code || `ID-${brand.id}`,
+    });
+
+    const [brands, setBrands] = useState((databaseBrands || []).map(normalizeBrandRecord));
     useEffect(() => {
-        setBrands(databaseBrands || []);
+        setBrands((databaseBrands || []).map(normalizeBrandRecord));
     }, [databaseBrands]);
 
-    const [categories, setCategories] = useState(INITIAL_CATEGORY_DATA);
+    const [categories, setCategories] = useState(
+        Array.isArray(databaseCategories) ? databaseCategories : INITIAL_CATEGORY_DATA
+    );
+    useEffect(() => {
+        setCategories(Array.isArray(databaseCategories) ? databaseCategories : INITIAL_CATEGORY_DATA);
+    }, [databaseCategories]);
 
     const [products, setProducts] = useState([
         {
@@ -579,7 +607,8 @@ export default function Dashboard({ databaseBrands }) {
     ]);
 
     // --- STATE FORM ---
-    const [brandInput, setBrandInput] = useState({ name: '', description: '', ownerId: '' });
+    const [brandInput, setBrandInput] = useState(createEmptyBrandInput());
+    const [savingBrandStatusId, setSavingBrandStatusId] = useState(null);
     const [logoFile, setLogoFile] = useState(null);
     const [logoPreview, setLogoPreview] = useState(null);
     const [editingBrandId, setEditingBrandId] = useState(null);
@@ -615,71 +644,148 @@ export default function Dashboard({ databaseBrands }) {
     const [statusFilter, setStatusFilter] = useState('Semua Status');
 
     // --- LOGIC HANDLERS BRAND ---
-    const handleToggleBrandStatus = (id) => {
-        setBrands(brands.map(brand => {
-            if (brand.id === id) {
-                const newStatus = brand.status === "Aktif" ? "Non-aktif" : "Aktif";
-                showToast(`Status brand diubah menjadi ${newStatus}`);
-                return { ...brand, status: newStatus };
-            }
-            return brand;
-        }));
+    const closeBrandModal = () => {
+        setBrandInput(createEmptyBrandInput());
+        setLogoFile(null);
+        setLogoPreview(null);
+        setEditingBrandId(null);
+        setIsBrandModalOpen(false);
+    };
+
+    const openCreateBrandModal = () => {
+        closeBrandModal();
+        setIsBrandModalOpen(true);
+    };
+
+    const toggleBrandStatusAutoSave = (brand) => {
+        const previousStatus = normalizeBrandStatus(brand.status);
+        const newStatus = previousStatus === 1 ? 0 : 1;
+
+        setSavingBrandStatusId(brand.id);
+        setBrands((currentBrands) =>
+            currentBrands.map((currentBrand) =>
+                currentBrand.id === brand.id ? { ...currentBrand, status: newStatus } : currentBrand
+            )
+        );
+
+        if (editingBrandId === brand.id) {
+            setBrandInput((currentInput) => ({ ...currentInput, status: newStatus }));
+        }
+
+        axios.post(`/brands/update/${brand.id}`, {
+            name: brand.name,
+            owner_name: brand.owner_name || '',
+            description: brand.description || '',
+            status: newStatus,
+        })
+            .then((response) => {
+                const savedBrand = normalizeBrandRecord(response?.data?.brand || { ...brand, status: newStatus });
+
+                setBrands((currentBrands) =>
+                    currentBrands.map((currentBrand) =>
+                        currentBrand.id === brand.id ? savedBrand : currentBrand
+                    )
+                );
+
+                if (editingBrandId === brand.id) {
+                    setBrandInput((currentInput) => ({
+                        ...currentInput,
+                        name: savedBrand.name || currentInput.name,
+                        owner_name: savedBrand.owner_name || '',
+                        description: savedBrand.description || '',
+                        status: normalizeBrandStatus(savedBrand.status),
+                    }));
+                }
+
+                showToast(`Status Brand diubah menjadi ${getBrandStatusLabel(savedBrand.status)}`);
+            })
+            .catch((error) => {
+                const errors = error?.response?.data?.errors || {};
+
+                setBrands((currentBrands) =>
+                    currentBrands.map((currentBrand) =>
+                        currentBrand.id === brand.id ? { ...currentBrand, status: previousStatus } : currentBrand
+                    )
+                );
+                if (editingBrandId === brand.id) {
+                    setBrandInput((currentInput) => ({ ...currentInput, status: previousStatus }));
+                }
+                showToast(getFirstErrorMessage(errors, `Gagal mengubah status ${brand.name}.`), "error");
+            })
+            .finally(() => {
+                setSavingBrandStatusId(null);
+            });
     };
 
     const handleSaveBrand = (e) => {
         e.preventDefault();
-        if (!brandInput.name) return;
+        const brandName = brandInput.name.trim();
 
-        // Bikin FormData karena kita mau kirim file (Gambar)
+        if (!brandName) {
+            showToast("Nama brand wajib diisi.", "error");
+            return;
+        }
+
         const formData = new FormData();
-        formData.append('name', brandInput.name);
-        formData.append('owner_name', brandInput.ownerId ? brandInput.ownerId.toString() : '');
-        formData.append('description', brandInput.description || "-");
+        formData.append('name', brandName);
+        formData.append('owner_name', brandInput.owner_name.trim());
+        formData.append('description', brandInput.description.trim());
+        formData.append('status', String(normalizeBrandStatus(brandInput.status)));
         if (logoFile) {
             formData.append('logo', logoFile);
         }
 
-        if (editingBrandId) {
-            // --- FITUR EDIT DATABASE ---
-            router.post(`/brands/update/${editingBrandId}`, formData, {
-                onSuccess: () => {
-                    showToast("Data brand berhasil diperbarui!");
-                    setBrandInput({ name: '', description: '', ownerId: '' });
-                    setLogoFile(null); setLogoPreview(null);
-                    setEditingBrandId(null);
-                    setIsBrandModalOpen(false);
-                }
-            });
-        } else {
-            // --- FITUR TAMBAH BARU DATABASE ---
+        const isEditing = Boolean(editingBrandId);
+
+        if (!isEditing) {
             const randomCode = Math.floor(1000 + Math.random() * 9000);
             formData.append('brand_code', `CL-${randomCode}`);
-
-            router.post('/brands', formData, {
-                onSuccess: () => {
-                    showToast("Brand baru berhasil ditambahkan!");
-                    setBrandInput({ name: '', description: '', ownerId: '' });
-                    setLogoFile(null); setLogoPreview(null);
-                    setIsBrandModalOpen(false);
-                }
-            });
         }
+
+        const targetUrl = isEditing ? `/brands/update/${editingBrandId}` : '/brands';
+
+        axios.post(targetUrl, formData, {
+            headers: {
+                'Content-Type': 'multipart/form-data',
+            },
+        })
+            .then((response) => {
+                const savedBrand = normalizeBrandRecord(response?.data?.brand || {});
+
+                if (savedBrand.id) {
+                    if (isEditing) {
+                        setBrands((currentBrands) =>
+                            currentBrands.map((currentBrand) =>
+                                currentBrand.id === savedBrand.id ? savedBrand : currentBrand
+                            )
+                        );
+                    } else {
+                        setBrands((currentBrands) => [savedBrand, ...currentBrands]);
+                    }
+                }
+
+                showToast(isEditing ? "Data brand berhasil diperbarui!" : "Brand baru berhasil ditambahkan!");
+                closeBrandModal();
+            })
+            .catch((error) => {
+                const errors = error?.response?.data?.errors || {};
+                showToast(
+                    getFirstErrorMessage(errors, isEditing ? "Gagal memperbarui data brand." : "Gagal menambahkan brand baru."),
+                    "error"
+                );
+            });
     };
 
     const handleEditBrand = (brand) => {
         setBrandInput({
-            name: brand.name,
-            description: brand.description === "-" ? "" : brand.description,
-            // Menggunakan owner_name dari database (jika ada), atau ownerId
-            ownerId: brand.owner_name || brand.ownerId || ''
+            name: brand.name || '',
+            description: brand.description === "-" ? "" : (brand.description || ''),
+            owner_name: brand.owner_name || '',
+            status: normalizeBrandStatus(brand.status),
         });
         setEditingBrandId(brand.id);
-
-        // --- TAMBAHAN UNTUK MENAMPILKAN LOGO LAMA ---
+        setLogoFile(null);
         setLogoPreview(brand.logo_url ? `/storage/${brand.logo_url}` : null);
-        setLogoFile(null); // Kosongkan file uplaod agar siap menerima file baru
-        // -------------------------------------------
-
         setIsBrandModalOpen(true);
     };
 
@@ -689,20 +795,30 @@ export default function Dashboard({ databaseBrands }) {
             title: "Hapus Brand?",
             message: "Data brand ini akan dihapus permanen. Produk yang terkait mungkin akan kehilangan referensi. Lanjutkan?",
             onConfirm: () => {
-                // Di sini kita panggil backend Laravel untuk menghapus datanya
-                router.delete(`/brands/${id}`, {
-                    onSuccess: () => {
+                axios.delete(`/brands/${id}`)
+                    .then((response) => {
+                        const deletedId = Number(response?.data?.deleted_id || id);
+
+                        setBrands((currentBrands) =>
+                            currentBrands.filter((currentBrand) => Number(currentBrand.id) !== deletedId)
+                        );
+
+                        if (editingBrandId === deletedId) {
+                            closeBrandModal();
+                        }
+
                         showToast("Brand berhasil dihapus!");
-                    }
-                });
+                    })
+                    .catch((error) => {
+                        const errors = error?.response?.data?.errors || {};
+                        showToast(getFirstErrorMessage(errors, "Gagal menghapus brand."), "error");
+                    });
             }
         });
     };
 
     const handleCancelEditBrand = () => {
-        setBrandInput({ name: '', description: '', ownerId: '' });
-        setEditingBrandId(null);
-        setIsBrandModalOpen(false);
+        closeBrandModal();
     };
 
     // --- LOGIC HANDLERS PRODUCT ---
@@ -919,35 +1035,85 @@ export default function Dashboard({ databaseBrands }) {
     };
 
     const addCategory = (level) => {
-        const newId = Date.now();
+        let name = '';
+        let parentId = null;
+
         if (level === 1) {
-            if (!newCatL1Name) return;
-            setCategories([...categories, { id: newId, name: newCatL1Name, subCategories: [] }]);
-            setNewCatL1Name('');
+            name = newCatL1Name.trim();
         } else if (level === 2 && selectedCatL1) {
-            if (!newCatL2Name) return;
-            const updatedCats = categories.map(c1 => {
-                if (c1.id === selectedCatL1) return { ...c1, subCategories: [...c1.subCategories, { id: newId, name: newCatL2Name, subSubCategories: [] }] };
-                return c1;
-            });
-            setCategories(updatedCats);
-            setNewCatL2Name('');
-        } else if (level === 3 && selectedCatL1 && selectedCatL2) {
-            if (!newCatL3Name) return;
-            const updatedCats = categories.map(c1 => {
-                if (c1.id === selectedCatL1) {
-                    const updatedSub = c1.subCategories.map(c2 => {
-                        if (c2.id === selectedCatL2) return { ...c2, subSubCategories: [...c2.subSubCategories, { id: newId, name: newCatL3Name }] };
-                        return c2;
-                    });
-                    return { ...c1, subCategories: updatedSub };
-                }
-                return c1;
-            });
-            setCategories(updatedCats);
-            setNewCatL3Name('');
+            name = newCatL2Name.trim();
+            parentId = selectedCatL1;
+        } else if (level === 3 && selectedCatL2) {
+            name = newCatL3Name.trim();
+            parentId = selectedCatL2;
         }
-        showToast("Kategori baru berhasil ditambahkan!");
+
+        if (!name) {
+            showToast("Nama kategori tidak boleh kosong.", "error");
+            return;
+        }
+
+        axios.post('/product-categories', {
+            name,
+            parent_id: parentId,
+        })
+            .then((response) => {
+                const createdCategory = response?.data?.category;
+                if (!createdCategory?.id) {
+                    showToast("Kategori berhasil ditambahkan, tetapi data respons tidak lengkap.", "error");
+                    return;
+                }
+
+                const createdId = Number(createdCategory.id);
+                const createdParentId = createdCategory.parent_id === null ? null : Number(createdCategory.parent_id);
+                const createdName = createdCategory.name;
+                const createdLevel = Number(createdCategory.level || level);
+
+                setCategories((currentCategories) => {
+                    if (createdLevel === 1) {
+                        return [
+                            ...currentCategories,
+                            { id: createdId, name: createdName, subCategories: [] },
+                        ];
+                    }
+
+                    if (createdLevel === 2) {
+                        return currentCategories.map((catL1) => {
+                            if (Number(catL1.id) !== createdParentId) return catL1;
+                            return {
+                                ...catL1,
+                                subCategories: [
+                                    ...(catL1.subCategories || []),
+                                    { id: createdId, name: createdName, subSubCategories: [] },
+                                ],
+                            };
+                        });
+                    }
+
+                    return currentCategories.map((catL1) => ({
+                        ...catL1,
+                        subCategories: (catL1.subCategories || []).map((catL2) => {
+                            if (Number(catL2.id) !== createdParentId) return catL2;
+                            return {
+                                ...catL2,
+                                subSubCategories: [
+                                    ...(catL2.subSubCategories || []),
+                                    { id: createdId, name: createdName },
+                                ],
+                            };
+                        }),
+                    }));
+                });
+
+                if (level === 1) setNewCatL1Name('');
+                if (level === 2) setNewCatL2Name('');
+                if (level === 3) setNewCatL3Name('');
+                showToast("Kategori baru berhasil ditambahkan!");
+            })
+            .catch((error) => {
+                const errors = error?.response?.data?.errors || {};
+                showToast(getFirstErrorMessage(errors, "Gagal menambahkan kategori."), "error");
+            });
     };
 
     const deleteCategory = (level, id) => {
@@ -962,30 +1128,44 @@ export default function Dashboard({ databaseBrands }) {
             title: title,
             message: msg,
             onConfirm: () => {
-                if (level === 1) {
-                    setCategories(categories.filter(c => c.id !== id));
-                    if (selectedCatL1 === id) { setSelectedCatL1(null); setSelectedCatL2(null); }
-                } else if (level === 2) {
-                    const updatedCats = categories.map(c1 => {
-                        if (c1.id === selectedCatL1) return { ...c1, subCategories: c1.subCategories.filter(c2 => c2.id !== id) };
-                        return c1;
-                    });
-                    setCategories(updatedCats);
-                    if (selectedCatL2 === id) setSelectedCatL2(null);
-                } else if (level === 3) {
-                    const updatedCats = categories.map(c1 => {
-                        if (c1.id === selectedCatL1) {
-                            const updatedSub = c1.subCategories.map(c2 => {
-                                if (c2.id === selectedCatL2) return { ...c2, subSubCategories: c2.subSubCategories.filter(c3 => c3.id !== id) };
-                                return c2;
-                            });
-                            return { ...c1, subCategories: updatedSub };
+                axios.delete(`/product-categories/${id}`)
+                    .then((response) => {
+                        const deletedId = Number(response?.data?.deleted_id || id);
+
+                        setCategories((currentCategories) => {
+                            if (level === 1) {
+                                return currentCategories.filter((catL1) => Number(catL1.id) !== deletedId);
+                            }
+
+                            if (level === 2) {
+                                return currentCategories.map((catL1) => ({
+                                    ...catL1,
+                                    subCategories: (catL1.subCategories || []).filter((catL2) => Number(catL2.id) !== deletedId),
+                                }));
+                            }
+
+                            return currentCategories.map((catL1) => ({
+                                ...catL1,
+                                subCategories: (catL1.subCategories || []).map((catL2) => ({
+                                    ...catL2,
+                                    subSubCategories: (catL2.subSubCategories || []).filter((catL3) => Number(catL3.id) !== deletedId),
+                                })),
+                            }));
+                        });
+
+                        if (level === 1 && Number(selectedCatL1) === deletedId) {
+                            setSelectedCatL1(null);
+                            setSelectedCatL2(null);
+                        } else if (level === 2 && Number(selectedCatL2) === deletedId) {
+                            setSelectedCatL2(null);
                         }
-                        return c1;
+
+                        showToast("Kategori berhasil dihapus!");
+                    })
+                    .catch((error) => {
+                        const errors = error?.response?.data?.errors || {};
+                        showToast(getFirstErrorMessage(errors, "Gagal menghapus kategori."), "error");
                     });
-                    setCategories(updatedCats);
-                }
-                showToast("Kategori berhasil dihapus!");
             }
         });
     };
@@ -1078,14 +1258,15 @@ export default function Dashboard({ databaseBrands }) {
     const BrandManager = () => {
         const filteredBrands = brands.filter(b =>
             b.name.toLowerCase().includes(globalSearch.toLowerCase()) ||
-            (b.code && b.code.toLowerCase().includes(globalSearch.toLowerCase())) ||
+            (b.brand_code && b.brand_code.toLowerCase().includes(globalSearch.toLowerCase())) ||
+            (b.owner_name && b.owner_name.toLowerCase().includes(globalSearch.toLowerCase())) ||
             (b.description && b.description.toLowerCase().includes(globalSearch.toLowerCase()))
         ).sort((a, b) => {
             const dir = brandSort.direction === 'asc' ? 1 : -1;
             if (brandSort.key === 'name') return a.name.localeCompare(b.name) * dir;
             if (brandSort.key === 'status') {
                 if (a.status === b.status) return 0;
-                return (a.status === 'Aktif' ? -1 : 1) * dir;
+                return (normalizeBrandStatus(a.status) === 1 ? -1 : 1) * dir;
             }
             if (brandSort.key === 'sku') {
                 const countA = products.filter(p => Number(p.brandId) === a.id).length;
@@ -1093,8 +1274,8 @@ export default function Dashboard({ databaseBrands }) {
                 return (countA - countB) * dir;
             }
             if (brandSort.key === 'owner') {
-                const ownerA = systemUsers.find(u => u.id === a.ownerId)?.name || '';
-                const ownerB = systemUsers.find(u => u.id === b.ownerId)?.name || '';
+                const ownerA = a.owner_name || '';
+                const ownerB = b.owner_name || '';
                 return ownerA.localeCompare(ownerB) * dir;
             }
             return (a.id - b.id) * dir;
@@ -1109,46 +1290,30 @@ export default function Dashboard({ databaseBrands }) {
                         <span className="text-sm font-medium text-slate-500">Total: {filteredBrands.length} Brand Terdaftar</span>
                     </div>
                     <button
-                        onClick={() => {
-                            // 1. Isi form dengan data teks yang lama
-                            setBrandInput({
-                                name: brand.name,
-                                description: brand.description || "",
-                                ownerId: brand.owner_name || ""
-                            });
-                            setEditingBrandId(brand.id);
-
-                            // 2. TAMPILKAN PREVIEW LOGO LAMA (Jika Ada)
-                            setLogoPreview(brand.logo_url ? `/storage/${brand.logo_url}` : null);
-
-                            // 3. Kosongkan file siap upload (karena kita belum memilih file baru)
-                            setLogoFile(null);
-
-                            setIsBrandModalOpen(true);
-                        }}
+                        onClick={openCreateBrandModal}
                         className="bg-[#C1986E] hover:bg-[#A37E58] text-white px-5 py-2.5 rounded-lg font-medium transition-all shadow-sm active:scale-95 text-sm flex items-center justify-center gap-2"
                     >
                         <Plus size={16} /> Tambah Brand Baru
                     </button>
                 </div>
 
-                <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-x-auto">
-                    <table className="w-full text-left whitespace-nowrap">
+                <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-x-auto [scrollbar-gutter:stable]">
+                    <table className="w-full min-w-[980px] table-fixed text-left whitespace-nowrap">
                         <thead className="bg-slate-50 border-b border-slate-200">
                             <tr>
-                                <th className="px-6 py-4 font-semibold text-slate-600 text-sm cursor-pointer hover:bg-slate-100 transition-colors group select-none" onClick={() => handleSortChange('name', brandSort, setBrandSort)}>
+                                <th className="w-[34%] px-6 py-4 font-semibold text-slate-600 text-sm cursor-pointer hover:bg-slate-100 transition-colors group select-none" onClick={() => handleSortChange('name', brandSort, setBrandSort)}>
                                     <div className="flex items-center gap-2">Info Brand <SortIcon columnKey="name" sortConfig={brandSort} /></div>
                                 </th>
-                                <th className="px-6 py-4 font-semibold text-slate-600 text-sm cursor-pointer hover:bg-slate-100 transition-colors group select-none" onClick={() => handleSortChange('owner', brandSort, setBrandSort)}>
+                                <th className="w-[24%] px-6 py-4 font-semibold text-slate-600 text-sm cursor-pointer hover:bg-slate-100 transition-colors group select-none" onClick={() => handleSortChange('owner', brandSort, setBrandSort)}>
                                     <div className="flex items-center gap-2">Pemilik (Brand Owner) <SortIcon columnKey="owner" sortConfig={brandSort} /></div>
                                 </th>
-                                <th className="px-6 py-4 font-semibold text-slate-600 text-sm cursor-pointer hover:bg-slate-100 transition-colors group select-none" onClick={() => handleSortChange('sku', brandSort, setBrandSort)}>
-                                    <div className="flex items-center gap-2">Jml SKU <SortIcon columnKey="sku" sortConfig={brandSort} /></div>
+                                <th className="w-[14%] px-6 py-4 font-semibold text-slate-600 text-sm cursor-pointer hover:bg-slate-100 transition-colors group select-none" onClick={() => handleSortChange('sku', brandSort, setBrandSort)}>
+                                    <div className="flex items-center gap-2">Jumlah SKU <SortIcon columnKey="sku" sortConfig={brandSort} /></div>
                                 </th>
-                                <th className="px-6 py-4 font-semibold text-slate-600 text-sm cursor-pointer hover:bg-slate-100 transition-colors group select-none" onClick={() => handleSortChange('status', brandSort, setBrandSort)}>
+                                <th className="w-[14%] px-6 py-4 font-semibold text-slate-600 text-sm cursor-pointer hover:bg-slate-100 transition-colors group select-none" onClick={() => handleSortChange('status', brandSort, setBrandSort)}>
                                     <div className="flex items-center gap-2">Status <SortIcon columnKey="status" sortConfig={brandSort} /></div>
                                 </th>
-                                <th className="px-6 py-4 font-semibold text-slate-600 text-sm text-center">Aksi</th>
+                                <th className="w-[14%] px-6 py-4 font-semibold text-slate-600 text-sm text-center">Aksi</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
@@ -1157,15 +1322,14 @@ export default function Dashboard({ databaseBrands }) {
                             ) : (
                                 filteredBrands.map((brand) => {
                                     const productCount = products.filter(p => Number(p.brandId) === brand.id).length;
-                                    const owner = systemUsers.find(u => u.id === brand.ownerId);
+                                    const ownerName = brand.owner_name || '';
 
                                     return (
-                                        <tr key={brand.id} className={`transition-colors ${brand.status === 'Aktif' ? 'hover:bg-slate-50' : 'bg-slate-50/50 grayscale-[20%]'}`}>
+                                        <tr key={brand.id} className={`transition-colors ${isBrandActive(brand.status) ? 'hover:bg-slate-50' : 'bg-slate-50/50 grayscale-[20%]'}`}>
                                             <td className="px-6 py-4">
                                                 <div className="flex items-center gap-3">
-                                                    <div className="h-10 w-10 bg-slate-100 rounded-full flex items-center justify-center text-slate-400 overflow-hidden border border-slate-200 flex-shrink-0">
+                                                    <div className="h-10 w-10 bg-slate-100 rounded-full flex items-center justify-center text-slate-400 overflow-hidden border border-slate-200">
                                                         {brand.logo_url ? (
-                                                            // object-cover memastikan gambar terpotong rapi menjadi 1:1 tanpa membuatnya gepeng
                                                             <img
                                                                 src={`/storage/${brand.logo_url}`}
                                                                 alt="Logo"
@@ -1175,48 +1339,46 @@ export default function Dashboard({ databaseBrands }) {
                                                             <ImageIcon size={18} />
                                                         )}
                                                     </div>
-                                                    <div>
-                                                        <p className={`font-medium text-sm ${brand.status === 'Aktif' ? 'text-slate-800' : 'text-slate-500'}`}>{brand.name}</p>
+                                                    <div className="min-w-0">
+                                                        <p className={`font-medium text-sm truncate ${isBrandActive(brand.status) ? 'text-slate-800' : 'text-slate-500'}`}>{brand.name}</p>
                                                         <p className="text-[10px] text-slate-400 font-mono bg-slate-100 px-1.5 py-0.5 rounded inline-block mt-0.5">
-                                                            {brand.code || `ID-${brand.id}`}
+                                                            {brand.brand_code || `ID-${brand.id}`}
                                                         </p>
                                                     </div>
                                                 </div>
                                             </td>
                                             <td className="px-6 py-4 text-sm text-slate-600">
-                                                {owner ? (
+                                                {ownerName ? (
                                                     <div className="flex items-center gap-2">
-                                                        <div className="w-6 h-6 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center text-[10px] font-bold">
-                                                            {owner.name.charAt(0)}
-                                                        </div>
-                                                        <span>{owner.name}</span>
+                                                        <span>{ownerName}</span>
                                                     </div>
                                                 ) : (
                                                     <span className="text-slate-400 italic">Belum ditetapkan</span>
                                                 )}
                                             </td>
                                             <td className="px-6 py-4">
-                                                <span className="bg-blue-50 text-blue-600 text-xs px-2.5 py-1 rounded-full font-medium">
+                                                <span className="inline-flex min-w-[90px] justify-center bg-blue-50 text-blue-600 text-xs px-2.5 py-1 rounded-full font-medium">
                                                     {productCount} Produk
                                                 </span>
                                             </td>
                                             <td className="px-6 py-4">
-                                                {brand.status === "Aktif" ? (
-                                                    <span className="bg-green-100 text-green-700 text-xs px-2 py-1 rounded-full flex items-center gap-1 w-fit">
+                                                {isBrandActive(brand.status) ? (
+                                                    <span className="inline-flex min-w-[94px] justify-center bg-green-100 text-green-700 text-xs px-2 py-1 rounded-full items-center gap-1">
                                                         <CheckCircle2 size={12} /> Aktif
                                                     </span>
                                                 ) : (
-                                                    <span className="bg-slate-200 text-slate-500 text-xs px-2 py-1 rounded-full flex items-center gap-1 w-fit">
+                                                    <span className="inline-flex min-w-[94px] justify-center bg-slate-200 text-slate-500 text-xs px-2 py-1 rounded-full items-center gap-1">
                                                         <X size={12} /> Non-aktif
                                                     </span>
                                                 )}
                                             </td>
                                             <td className="px-6 py-4 text-center">
                                                 <div className="flex items-center justify-center gap-2">
-                                                    <Tooltip text={brand.status === "Aktif" ? "Nonaktifkan Brand" : "Aktifkan Brand"} position="top">
+                                                    <Tooltip text={isBrandActive(brand.status) ? "Nonaktifkan Brand" : "Aktifkan Brand"} position="top">
                                                         <ToggleSwitch
-                                                            checked={brand.status === 'Aktif'}
-                                                            onChange={() => handleToggleBrandStatus(brand.id)}
+                                                            checked={isBrandActive(brand.status)}
+                                                            disabled={savingBrandStatusId === brand.id}
+                                                            onChange={() => toggleBrandStatusAutoSave(brand)}
                                                         />
                                                     </Tooltip>
                                                     <Tooltip text="Edit Brand" position="top">
@@ -1313,12 +1475,12 @@ export default function Dashboard({ databaseBrands }) {
                                                 <label className="text-xs font-bold text-slate-500 uppercase tracking-wide">Pemilik Brand (Brand Owner)</label>
                                                 <select
                                                     className="w-full border border-slate-200 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-[#C1986E] bg-white text-sm"
-                                                    value={brandInput.ownerId}
-                                                    onChange={(e) => setBrandInput({ ...brandInput, ownerId: e.target.value })}
+                                                    value={brandInput.owner_name}
+                                                    onChange={(e) => setBrandInput({ ...brandInput, owner_name: e.target.value })}
                                                 >
                                                     <option value="">-- Pilih Pemilik (Opsional) --</option>
                                                     {systemUsers.filter(u => u.role === "Brand Owner").map(user => (
-                                                        <option key={user.id} value={user.id}>{user.name} ({user.email})</option>
+                                                        <option key={user.id} value={user.name}>{user.name} ({user.email})</option>
                                                     ))}
                                                 </select>
                                                 <p className="text-[10px] text-slate-400">Pilih pengguna yang akan memiliki akses ke data analitik brand ini.</p>
@@ -1662,7 +1824,7 @@ export default function Dashboard({ databaseBrands }) {
                                                 required
                                             >
                                                 <option value="" disabled>-- Pilih Brand Terdaftar --</option>
-                                                {brands.filter(b => b.status === "Aktif").map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                                                {brands.filter(b => isBrandActive(b.status)).map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
                                             </select>
                                         </div>
                                     </div>
@@ -3004,7 +3166,7 @@ export default function Dashboard({ databaseBrands }) {
                         </div>
                         <div className="p-4 bg-slate-50 border-t border-slate-100 flex gap-3">
                             <button onClick={() => setConfirmObj({ ...confirmObj, isOpen: false })} className="flex-1 py-2.5 rounded-lg font-medium text-slate-600 bg-white border border-slate-200 hover:bg-slate-100 transition-all active:scale-95 text-sm">Batal</button>
-                            <button onClick={() => { confirmObj.onConfirm(); setConfirmObj({ ...confirmObj, isOpen: false }); }} className="flex-1 py-2.5 rounded-lg font-medium text-white bg-red-600 hover:bg-red-700 transition-all shadow-sm active:scale-95 text-sm">Ya, Lanjutkan</button>
+                            <button onClick={() => { confirmObj.onConfirm?.(); setConfirmObj({ ...confirmObj, isOpen: false }); }} className="flex-1 py-2.5 rounded-lg font-medium text-white bg-red-600 hover:bg-red-700 transition-all shadow-sm active:scale-95 text-sm">Ya, Lanjutkan</button>
                         </div>
                     </div>
                 </div>

@@ -2,18 +2,15 @@
 
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\BrandController;
-use Illuminate\Foundation\Application;
+use App\Http\Controllers\CategoryController;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
-use Inertia\Inertia;
 
-// Halaman depan (Welcome)
+// Halaman depan: arahkan ke login sebelum dashboard
 Route::get('/', function () {
-    return Inertia::render('Welcome', [
-        'canLogin' => Route::has('login'),
-        'canRegister' => Route::has('register'),
-        'laravelVersion' => Application::VERSION,
-        'phpVersion' => PHP_VERSION,
-    ]);
+    return Auth::check()
+        ? redirect()->route('dashboard')
+        : redirect()->route('login');
 });
 
 // Perubahan di sini: Rute dashboard sekarang memanggil fungsi 'index' di BrandController
@@ -31,6 +28,10 @@ Route::middleware('auth')->group(function () {
     Route::post('/brands', [BrandController::class, 'store'])->name('brands.store');
     Route::post('/brands/update/{brand}', [BrandController::class, 'update'])->name('brands.update'); // Pakai POST untuk update gambar
     Route::delete('/brands/{brand}', [BrandController::class, 'destroy'])->name('brands.destroy');
+
+    // Rute API untuk Kategori Produk (3 level)
+    Route::post('/product-categories', [CategoryController::class, 'store'])->name('product-categories.store');
+    Route::delete('/product-categories/{productCategory}', [CategoryController::class, 'destroy'])->name('product-categories.destroy');
 });
 
 require __DIR__ . '/auth.php';
