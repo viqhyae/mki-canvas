@@ -750,9 +750,29 @@ export default function Dashboard({ databaseBrands, databaseCategories, database
         (authUserId != null && isSameEntityId(user.id, authUserId)) ||
         (authUserEmail !== '' && String(user.email || '').trim().toLowerCase() === authUserEmail)
     );
-    const sidebarUserName = (authUser?.name || matchedSystemUser?.name || 'Pengguna').trim() || 'Pengguna';
-    const sidebarUserRole = normalizeUserRole(authUser?.role || matchedSystemUser?.role);
+    const sidebarUserName = (matchedSystemUser?.name || authUser?.name || 'Pengguna').trim() || 'Pengguna';
+    const sidebarUserRole = normalizeUserRole(matchedSystemUser?.role || authUser?.role);
     const sidebarUserInitials = getUserInitials(sidebarUserName);
+    const isActiveSuperAdminUser = (user) => (
+        normalizeUserRole(user?.role) === 'Super Admin' &&
+        normalizeUserStatus(user?.status) === 1
+    );
+    const wouldLeaveNoActiveSuperAdmin = (targetUser, nextRole, nextStatus) => {
+        if (!targetUser) return false;
+
+        const currentlyActiveSuperAdmin = isActiveSuperAdminUser(targetUser);
+        const willRemainActiveSuperAdmin = (
+            normalizeUserRole(nextRole ?? targetUser.role) === 'Super Admin' &&
+            normalizeUserStatus(nextStatus ?? targetUser.status) === 1
+        );
+
+        if (!currentlyActiveSuperAdmin || willRemainActiveSuperAdmin) {
+            return false;
+        }
+
+        const activeSuperAdminCount = systemUsers.filter(isActiveSuperAdminUser).length;
+        return activeSuperAdminCount <= 1;
+    };
 
     const [products, setProducts] = useState([
         {
@@ -1271,6 +1291,13 @@ export default function Dashboard({ databaseBrands, databaseCategories, database
             status: normalizeUserStatus(userInput.status),
         };
 
+        if (isEditing && previousUser && wouldLeaveNoActiveSuperAdmin(previousUser, payload.role, payload.status)) {
+            userSubmitLockRef.current = false;
+            setIsSavingUser(false);
+            showToast("Minimal harus ada 1 akun Super Admin aktif. Ubah akun lain menjadi Super Admin terlebih dahulu.", "error");
+            return;
+        }
+
         const draftInputSnapshot = { ...userInput };
         const previousUsersSnapshot = systemUsers;
         const previousBrandsSnapshot = brands;
@@ -1412,6 +1439,11 @@ export default function Dashboard({ databaseBrands, databaseCategories, database
             return;
         }
 
+        if (wouldLeaveNoActiveSuperAdmin(targetUser, 'Brand Owner', 0)) {
+            showToast("Minimal harus ada 1 akun Super Admin aktif. Akun ini tidak bisa dihapus.", "error");
+            return;
+        }
+
         setConfirmObj({
             isOpen: true,
             title: "Hapus Akun Pengguna?",
@@ -1475,6 +1507,10 @@ export default function Dashboard({ databaseBrands, databaseCategories, database
 
         const previousStatus = normalizeUserStatus(user.status);
         const newStatus = previousStatus === 1 ? 0 : 1;
+        if (wouldLeaveNoActiveSuperAdmin(user, user.role, newStatus)) {
+            showToast("Minimal harus ada 1 akun Super Admin aktif. Akun ini tidak bisa dinonaktifkan.", "error");
+            return;
+        }
 
         setUserPendingAction(user.id, true);
         transitionSetUsers((currentUsers) =>

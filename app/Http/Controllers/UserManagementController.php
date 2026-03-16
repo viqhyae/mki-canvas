@@ -56,6 +56,14 @@ class UserManagementController extends Controller
         $newRole = (string) $validated['role'];
         $newName = trim((string) $validated['name']);
 
+        if ($this->wouldLeaveNoActiveSuperAdmin($user, $newRole, $newStatus)) {
+            return response()->json([
+                'errors' => [
+                    'role' => ['Minimal harus ada 1 akun Super Admin aktif. Aksi ini tidak diizinkan.'],
+                ],
+            ], 422);
+        }
+
         if (Auth::id() === $user->id && $newStatus === 0) {
             return response()->json([
                 'errors' => [
@@ -85,6 +93,14 @@ class UserManagementController extends Controller
         ]);
 
         $newStatus = (int) $validated['status'];
+        if ($this->wouldLeaveNoActiveSuperAdmin($user, null, $newStatus)) {
+            return response()->json([
+                'errors' => [
+                    'status' => ['Minimal harus ada 1 akun Super Admin aktif. Aksi ini tidak diizinkan.'],
+                ],
+            ], 422);
+        }
+
         if (Auth::id() === $user->id && $newStatus === 0) {
             return response()->json([
                 'errors' => [
@@ -108,6 +124,14 @@ class UserManagementController extends Controller
             return response()->json([
                 'errors' => [
                     'user' => ['Akun Anda sendiri tidak dapat dihapus.'],
+                ],
+            ], 422);
+        }
+
+        if ($this->wouldLeaveNoActiveSuperAdmin($user, 'Brand Owner', 0)) {
+            return response()->json([
+                'errors' => [
+                    'user' => ['Minimal harus ada 1 akun Super Admin aktif. Akun ini tidak dapat dihapus.'],
                 ],
             ], 422);
         }
@@ -173,6 +197,35 @@ class UserManagementController extends Controller
         Brand::query()
             ->where('owner_name', $ownerName)
             ->update(['owner_name' => null]);
+    }
+
+    private function activeSuperAdminCount(): int
+    {
+        if (!Schema::hasTable('users')) {
+            return 0;
+        }
+
+        return (int) User::query()
+            ->where('role', 'Super Admin')
+            ->where('status', 1)
+            ->count();
+    }
+
+    private function wouldLeaveNoActiveSuperAdmin(User $user, ?string $nextRole = null, ?int $nextStatus = null): bool
+    {
+        $currentRole = (string) ($user->role ?? 'Brand Owner');
+        $currentStatus = (int) ($user->status ?? 1);
+        $targetRole = $nextRole ?? $currentRole;
+        $targetStatus = $nextStatus ?? $currentStatus;
+
+        $isCurrentlyActiveSuperAdmin = $currentRole === 'Super Admin' && $currentStatus === 1;
+        $willRemainActiveSuperAdmin = $targetRole === 'Super Admin' && $targetStatus === 1;
+
+        if (!$isCurrentlyActiveSuperAdmin || $willRemainActiveSuperAdmin) {
+            return false;
+        }
+
+        return $this->activeSuperAdminCount() <= 1;
     }
 
     private function userPayload(User $user): array
