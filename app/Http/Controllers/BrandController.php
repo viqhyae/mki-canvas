@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Brand;
 use App\Models\ProductCategory;
+use App\Models\TagBatch;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
@@ -18,6 +19,7 @@ class BrandController extends Controller {
     public function index() {
         $databaseCategories = [];
         $databaseUsers = [];
+        $databaseTagBatches = [];
 
         if (Schema::hasTable('product_categories')) {
             $databaseCategories = ProductCategory::query()
@@ -81,6 +83,14 @@ class BrandController extends Controller {
                 ->all();
         }
 
+        if (Schema::hasTable('tag_batches')) {
+            $databaseTagBatches = TagBatch::query()
+                ->latest('id')
+                ->get()
+                ->map(fn (TagBatch $tagBatch) => $this->tagBatchPayload($tagBatch))
+                ->all();
+        }
+
         return Inertia::render('Dashboard', [
             'databaseBrands' => Brand::query()
                 ->latest('id')
@@ -89,6 +99,7 @@ class BrandController extends Controller {
                 ->all(),
             'databaseCategories' => $databaseCategories,
             'databaseUsers' => $databaseUsers,
+            'databaseTagBatches' => $databaseTagBatches,
         ]);
     }
 
@@ -251,6 +262,27 @@ class BrandController extends Controller {
         }
 
         return $path !== '' ? $path : null;
+    }
+
+    private function tagBatchPayload(TagBatch $tagBatch): array
+    {
+        return [
+            'id' => $tagBatch->batch_code,
+            'date' => optional($tagBatch->created_at)->format('d M Y, H:i'),
+            'productName' => $tagBatch->product_name,
+            'brandName' => $tagBatch->brand_name ?: '-',
+            'qty' => (int) $tagBatch->quantity,
+            'firstCode' => $tagBatch->first_code,
+            'lastCode' => $tagBatch->last_code,
+            'status' => $tagBatch->status,
+            'settings' => [
+                'ecc' => (string) $tagBatch->error_correction,
+                'idLength' => (int) $tagBatch->id_length . ' Karakter',
+                'pin' => $tagBatch->use_pin ? ('Ya (' . (int) ($tagBatch->pin_length ?? 0) . ' Digit)') : 'Tidak',
+            ],
+            'created_at' => optional($tagBatch->created_at)->toISOString(),
+            'updated_at' => optional($tagBatch->updated_at)->toISOString(),
+        ];
     }
 
     private function storeLogoFile(UploadedFile $logoFile): ?string

@@ -26,7 +26,6 @@ import {
     ListTree,
     UploadCloud,
     QrCode,
-    Printer,
     RefreshCw,
     FileArchive,
     Download,
@@ -56,6 +55,7 @@ import {
 import { router, usePage } from '@inertiajs/react';
 import axios from 'axios';
 import { createPortal } from 'react-dom';
+import { jsPDF } from 'jspdf';
 // Import QRCode untuk generate QR berbasis Vektor (SVG)
 import { QRCodeSVG } from 'qrcode.react';
 
@@ -397,7 +397,7 @@ const LeafletMap = () => {
     );
 };
 
-export default function Dashboard({ databaseBrands, databaseCategories, databaseUsers }) {
+export default function Dashboard({ databaseBrands, databaseCategories, databaseUsers, databaseTagBatches }) {
     const authUser = usePage().props?.auth?.user || null;
     const [activeTab, setActiveTab] = useState('dashboard');
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -492,6 +492,21 @@ export default function Dashboard({ databaseBrands, databaseCategories, database
         email: user?.email || '',
         role: normalizeUserRole(user?.role),
         status: normalizeUserStatus(user?.status),
+    });
+    const normalizeBatchRecord = (batch) => ({
+        id: String(batch?.id || ''),
+        date: batch?.date || '',
+        productName: batch?.productName || '',
+        brandName: batch?.brandName || '-',
+        qty: Number(batch?.qty || 0),
+        firstCode: batch?.firstCode || '',
+        lastCode: batch?.lastCode || '',
+        status: batch?.status === 'Suspended' ? 'Suspended' : 'Generated',
+        settings: {
+            ecc: batch?.settings?.ecc || 'M',
+            idLength: batch?.settings?.idLength || '8 Karakter',
+            pin: batch?.settings?.pin || 'Tidak',
+        },
     });
     const createEmptyUserInput = () => ({ name: '', email: '', role: 'Brand Owner', password: '', status: 1 });
     const normalizeComparableId = (value) => String(value ?? '');
@@ -826,44 +841,10 @@ export default function Dashboard({ databaseBrands, databaseCategories, database
         }
     ]);
 
-    const [tags, setTags] = useState([
-        // Batch Aktif - Luxury Rose EDP (101)
-        { code: "MKI-101-ABCD1234", productId: 101, id: 1682000000001, productName: "Luxury Rose EDP 30ml", status: "Aktif", batchId: "BATCH-820001", pin: "123456", ecc: "M" },
-        { code: "MKI-101-EFGH5678", productId: 101, id: 1682000000002, productName: "Luxury Rose EDP 30ml", status: "Aktif", batchId: "BATCH-820001", pin: "654321", ecc: "M" },
-        { code: "MKI-101-WXYZ9012", productId: 101, id: 1682000000003, productName: "Luxury Rose EDP 30ml", status: "Sudah Scan", batchId: "BATCH-820001", pin: "112233", ecc: "M" },
-
-        // Batch Aktif - Acne Fighter Night Cream (102)
-        { code: "MKI-102-IJKL9012", productId: 102, id: 1682100000001, productName: "Acne Fighter Night Cream", status: "Aktif", batchId: "BATCH-821001", pin: null, ecc: "L" },
-        { code: "MKI-102-MNOP3456", productId: 102, id: 1682100000002, productName: "Acne Fighter Night Cream", status: "Aktif", batchId: "BATCH-821001", pin: null, ecc: "L" },
-        { code: "MKI-102-QRST7890", productId: 102, id: 1682100000003, productName: "Acne Fighter Night Cream", status: "Invalid", batchId: "BATCH-821001", pin: null, ecc: "L" },
-
-        // Batch Suspended - Gentle Facial Wash (103)
-        { code: "MKI-103-SUSP0001", productId: 103, id: 1682200000001, productName: "Gentle Facial Wash 100ml", status: "Suspended", batchId: "BATCH-822002", pin: "998877", ecc: "H" },
-        { code: "MKI-103-SUSP0002", productId: 103, id: 1682200000002, productName: "Gentle Facial Wash 100ml", status: "Suspended", batchId: "BATCH-822002", pin: "778899", ecc: "H" },
-
-        // Batch Aktif - Coffee Body Scrub (105)
-        { code: "MKI-105-SCRB0001", productId: 105, id: 1682300000001, productName: "Coffee Body Scrub", status: "Aktif", batchId: "BATCH-823003", pin: null, ecc: "M" },
-        { code: "MKI-105-SCRB0002", productId: 105, id: 1682300000002, productName: "Coffee Body Scrub", status: "Aktif", batchId: "BATCH-823003", pin: null, ecc: "M" },
-    ]);
-
-    const [batches, setBatches] = useState([
-        {
-            id: "BATCH-823003", date: "10 Mar 2026, 08:00", productName: "Coffee Body Scrub", brandName: "PureNaturals", qty: 250,
-            firstCode: "MKI-105-SCRB0001", lastCode: "MKI-105-SCRB0250", status: "Generated", settings: { ecc: "M", idLength: "8 Karakter", pin: "Tidak" }
-        },
-        {
-            id: "BATCH-822002", date: "15 Jan 2026, 11:45", productName: "Gentle Facial Wash 100ml", brandName: "Glow & Co", qty: 2000,
-            firstCode: "MKI-103-SUSP0001", lastCode: "MKI-103-SUSP2000", status: "Suspended", settings: { ecc: "H", idLength: "10 Karakter", pin: "Ya (6 Digit)" }
-        },
-        {
-            id: "BATCH-821001", date: "05 Okt 2025, 14:30", productName: "Acne Fighter Night Cream", brandName: "DermaBeauty", qty: 500,
-            firstCode: "MKI-102-IJKL9012", lastCode: "MKI-102-XYZW9999", status: "Generated", settings: { ecc: "L", idLength: "8 Karakter", pin: "Tidak" }
-        },
-        {
-            id: "BATCH-820001", date: "01 Okt 2025, 09:15", productName: "Luxury Rose EDP 30ml", brandName: "Luxe Scents", qty: 1000,
-            firstCode: "MKI-101-ABCD1234", lastCode: "MKI-101-ZZZZ8888", status: "Generated", settings: { ecc: "M", idLength: "8 Karakter", pin: "Ya (6 Digit)" }
-        }
-    ]);
+    const [batches, setBatches] = useState((databaseTagBatches || []).map(normalizeBatchRecord));
+    const [isSavingBatch, setIsSavingBatch] = useState(false);
+    const [pendingBatchActionIds, setPendingBatchActionIds] = useState([]);
+    const totalGeneratedTagCount = batches.reduce((total, batch) => total + Number(batch.qty || 0), 0);
 
     // --- STATE FORM ---
     const [brandInput, setBrandInput] = useState(createEmptyBrandInput());
@@ -882,7 +863,7 @@ export default function Dashboard({ databaseBrands, databaseCategories, database
     const [passwordData, setPasswordData] = useState({ userId: null, userName: '', newPassword: '', confirmPassword: '' });
 
     const [tagConfig, setTagConfig] = useState({
-        productId: '', quantity: 100, idLength: 8, usePin: true, pinLength: 6, errorCorrection: 'M'
+        productId: '', quantity: 100, idLength: 8, usePin: false, pinLength: 6, errorCorrection: 'M'
     });
     const [isTagModalOpen, setIsTagModalOpen] = useState(false);
     const [generatedQR, setGeneratedQR] = useState(null);
@@ -909,6 +890,7 @@ export default function Dashboard({ databaseBrands, databaseCategories, database
     const brandSubmitLockRef = useRef(false);
     const userSubmitLockRef = useRef(false);
     const categorySubmitLockRef = useRef(false);
+    const tagSubmitLockRef = useRef(false);
 
     const transitionSetBrands = (updater) => {
         startTransition(() => {
@@ -952,6 +934,27 @@ export default function Dashboard({ databaseBrands, databaseCategories, database
     };
 
     const isUserPendingAction = (userId) => pendingUserActionIds.includes(normalizeComparableId(userId));
+    const setBatchPendingAction = (batchId, isPending) => {
+        const key = normalizeComparableId(batchId);
+
+        setPendingBatchActionIds((currentIds) => {
+            const alreadyPending = currentIds.includes(key);
+            if (isPending) {
+                return alreadyPending ? currentIds : [...currentIds, key];
+            }
+
+            if (!alreadyPending) {
+                return currentIds;
+            }
+
+            return currentIds.filter((id) => id !== key);
+        });
+    };
+    const isBatchPendingAction = (batchId) => pendingBatchActionIds.includes(normalizeComparableId(batchId));
+
+    useEffect(() => {
+        setBatches((databaseTagBatches || []).map(normalizeBatchRecord));
+    }, [databaseTagBatches]);
 
     useEffect(() => {
         return () => {
@@ -1601,48 +1604,76 @@ export default function Dashboard({ databaseBrands, databaseCategories, database
     // --- LOGIC CATEGORY & TAGS ---
     const handleGenerateTags = (e) => {
         e.preventDefault();
-        if (!tagConfig.productId) { showToast("Pilih produk terlebih dahulu!", "error"); return; }
-
-        const qty = Number(tagConfig.quantity) || 1;
-        const product = products.find(p => p.id == tagConfig.productId);
-        const newBatchTags = [];
-        const baseId = Date.now();
-        const batchId = `BATCH-${baseId.toString().slice(-6)}`;
-
-        for (let i = 0; i < qty; i++) {
-            const randomStr = Math.random().toString(36).substring(2, 2 + tagConfig.idLength).toUpperCase();
-            const finalRandom = randomStr.padEnd(tagConfig.idLength, 'X');
-            const finalCode = `MKI-${product.id}-${finalRandom}`;
-
-            let pin = null;
-            if (tagConfig.usePin) {
-                pin = Math.floor(Math.random() * Math.pow(10, tagConfig.pinLength)).toString().padStart(tagConfig.pinLength, '0');
-            }
-
-            newBatchTags.push({
-                code: finalCode, productId: tagConfig.productId, id: baseId + i,
-                productName: product.name, status: 'Aktif', batchId: batchId, pin: pin, ecc: tagConfig.errorCorrection
-            });
+        if (tagSubmitLockRef.current || isSavingBatch) return;
+        if (!tagConfig.productId) {
+            showToast("Pilih produk terlebih dahulu!", "error");
+            return;
         }
 
-        setTags([...newBatchTags, ...tags]);
+        const qty = Number(tagConfig.quantity) || 0;
+        if (qty < 1) {
+            showToast("Jumlah tag minimal 1.", "error");
+            return;
+        }
 
-        const newBatchRecord = {
-            id: batchId,
-            date: new Date().toLocaleString('id-ID', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }).replace('.', ':'),
-            productName: product.name, brandName: product.brandName, qty: qty,
-            firstCode: newBatchTags[0].code, lastCode: newBatchTags[newBatchTags.length - 1].code, status: 'Generated',
-            settings: { ecc: tagConfig.errorCorrection, idLength: `${tagConfig.idLength} Karakter`, pin: tagConfig.usePin ? `Ya (${tagConfig.pinLength} Digit)` : 'Tidak' }
-        };
+        const product = products.find((item) => String(item.id) === String(tagConfig.productId));
+        if (!product) {
+            showToast("Produk tidak ditemukan. Silakan pilih ulang produk.", "error");
+            return;
+        }
 
-        setBatches([newBatchRecord, ...batches]);
+        const relatedBrand = brands.find((brand) =>
+            Number(brand.id) === Number(product.brandId) ||
+            String(brand.name || '').trim() === String(product.brandName || '').trim()
+        );
 
-        setGeneratedQR({
-            code: newBatchTags[0].code, productName: product.name, count: qty, batchId: batchId,
-            ecc: tagConfig.errorCorrection, idLength: tagConfig.idLength, usePin: tagConfig.usePin, pinLength: tagConfig.pinLength
-        });
+        tagSubmitLockRef.current = true;
+        setIsSavingBatch(true);
 
-        setIsTagModalOpen(true);
+        axios.post('/tag-batches', {
+            product_name: product.name,
+            brand_name: product.brandName || relatedBrand?.name || '',
+            brand_code: relatedBrand?.brand_code || '',
+            quantity: qty,
+            id_length: Number(tagConfig.idLength) || 8,
+            error_correction: tagConfig.errorCorrection || 'M',
+            use_pin: false,
+            pin_length: null,
+        })
+            .then((response) => {
+                const createdBatch = normalizeBatchRecord(response?.data?.batch || {});
+                if (!createdBatch.id) {
+                    throw new Error('TAG_BATCH_RESPONSE_MISSING_ID');
+                }
+
+                setBatches((currentBatches) => [createdBatch, ...currentBatches]);
+                setGeneratedQR({
+                    code: createdBatch.firstCode,
+                    productName: createdBatch.productName,
+                    count: createdBatch.qty,
+                    batchId: createdBatch.id,
+                    ecc: createdBatch.settings?.ecc || 'M',
+                    idLength: Number(tagConfig.idLength) || 8,
+                    usePin: false,
+                    pinLength: 0,
+                });
+                setIsTagModalOpen(true);
+                showToast(`Batch ${createdBatch.id} berhasil dibuat!`);
+            })
+            .catch((error) => {
+                const errors = error?.response?.data?.errors || {};
+
+                if (error?.message === 'TAG_BATCH_RESPONSE_MISSING_ID') {
+                    showToast("Respons server generate batch tidak lengkap. Silakan coba lagi.", "error");
+                    return;
+                }
+
+                showToast(getFirstErrorMessage(errors, "Gagal membuat batch tag."), "error");
+            })
+            .finally(() => {
+                tagSubmitLockRef.current = false;
+                setIsSavingBatch(false);
+            });
     };
 
     const addCategory = (level) => {
@@ -1815,7 +1846,7 @@ export default function Dashboard({ databaseBrands, databaseCategories, database
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
                     <StatCard title="Total Brand" value={brands.length} icon={Building2} color="bg-[#C1986E]" />
                     <StatCard title="Total SKU Produk" value={products.length} icon={Package} color="bg-emerald-500" />
-                    <StatCard title="Tag QR Aktif" value={tags.length} icon={Tag} color="bg-purple-500" />
+                    <StatCard title="Tag QR Aktif" value={new Intl.NumberFormat('id-ID').format(totalGeneratedTagCount)} icon={Tag} color="bg-purple-500" />
                     <StatCard title="Scan Validasi" value="1.248" icon={ScanLine} color="bg-blue-500" />
                 </div>
 
@@ -2963,21 +2994,42 @@ export default function Dashboard({ databaseBrands, databaseCategories, database
 
     const TagGenerator = () => {
         const handleDeleteBatch = (batchId) => {
+            if (isBatchPendingAction(batchId)) return;
+
             setConfirmObj({
                 isOpen: true,
                 title: "Hapus Batch Tag?",
                 message: `Semua tag ID yang tergabung di dalam batch ${batchId} akan ikut terhapus dan tidak lagi valid. Lanjutkan?`,
                 onConfirm: () => {
-                    setBatches(batches.filter(b => b.id !== batchId));
-                    setTags(tags.filter(t => t.batchId !== batchId));
-                    showToast(`Data batch ${batchId} berhasil dihapus!`);
+                    if (isBatchPendingAction(batchId)) return;
+
+                    const previousBatchesSnapshot = batches;
+                    setBatchPendingAction(batchId, true);
+                    setBatches((currentBatches) =>
+                        currentBatches.filter((batch) => !isSameEntityId(batch.id, batchId))
+                    );
+
+                    axios.delete(`/tag-batches/${batchId}`)
+                        .then(() => {
+                            showToast(`Data batch ${batchId} berhasil dihapus!`);
+                        })
+                        .catch((error) => {
+                            setBatches(previousBatchesSnapshot);
+                            const errors = error?.response?.data?.errors || {};
+                            showToast(getFirstErrorMessage(errors, "Gagal menghapus batch tag."), "error");
+                        })
+                        .finally(() => {
+                            setBatchPendingAction(batchId, false);
+                        });
                 }
             });
         };
 
-        // FUNGSI BARU: Suspend / Aktifkan kembali Batch
         const handleToggleBatchStatus = (batchId, currentStatus) => {
+            if (isBatchPendingAction(batchId)) return;
+
             const isSuspending = currentStatus === 'Generated';
+            const nextStatus = isSuspending ? 'Suspended' : 'Generated';
             setConfirmObj({
                 isOpen: true,
                 title: isSuspending ? "Suspend / Recall Batch?" : "Aktifkan Kembali Batch?",
@@ -2985,69 +3037,152 @@ export default function Dashboard({ databaseBrands, databaseCategories, database
                     ? `PERINGATAN: Menonaktifkan batch ${batchId} akan membuat SEMUA tag di dalamnya berstatus INVALID/RECALL saat di-scan oleh pelanggan. Lanjutkan?`
                     : `Batch ${batchId} akan diaktifkan kembali dan tag di dalamnya akan kembali berstatus valid saat di-scan. Lanjutkan?`,
                 onConfirm: () => {
-                    setBatches(batches.map(b =>
-                        b.id === batchId ? { ...b, status: isSuspending ? 'Suspended' : 'Generated' } : b
-                    ));
-                    showToast(`Status batch ${batchId} berhasil diubah!`);
+                    if (isBatchPendingAction(batchId)) return;
+
+                    const previousBatchesSnapshot = batches;
+                    setBatchPendingAction(batchId, true);
+                    setBatches((currentBatches) =>
+                        currentBatches.map((batch) =>
+                            isSameEntityId(batch.id, batchId) ? { ...batch, status: nextStatus } : batch
+                        )
+                    );
+
+                    axios.post(`/tag-batches/${batchId}/status`, { status: nextStatus })
+                        .then((response) => {
+                            const savedBatch = normalizeBatchRecord(response?.data?.batch || {});
+                            setBatches((currentBatches) =>
+                                currentBatches.map((batch) =>
+                                    isSameEntityId(batch.id, batchId) ? savedBatch : batch
+                                )
+                            );
+                            showToast(`Status batch ${batchId} berhasil diubah!`);
+                        })
+                        .catch((error) => {
+                            setBatches(previousBatchesSnapshot);
+                            const errors = error?.response?.data?.errors || {};
+                            showToast(getFirstErrorMessage(errors, "Gagal mengubah status batch."), "error");
+                        })
+                        .finally(() => {
+                            setBatchPendingAction(batchId, false);
+                        });
                 }
             });
         };
 
-        const handlePrintBatch = (batchId) => {
-            const batchTags = tags.filter(t => t.batchId === batchId);
-            if (batchTags.length === 0) {
-                showToast("Data tag untuk batch ini tidak ditemukan.", "error");
-                return;
+        const handleDownloadBatchPdf = async (batchId) => {
+            if (isBatchPendingAction(batchId)) return;
+            setBatchPendingAction(batchId, true);
+
+            try {
+                const response = await axios.get(`/tag-batches/${batchId}/codes`);
+                const batchTags = Array.isArray(response?.data?.codes) ? response.data.codes : [];
+                if (batchTags.length === 0) {
+                    showToast("Data tag untuk batch ini tidak ditemukan.", "error");
+                    return;
+                }
+
+                const buildBatchPdfBlob = async (withKodeMonoFont) => {
+                    const pdf = new jsPDF({
+                        orientation: 'portrait',
+                        unit: 'mm',
+                        format: [310, 470], // 31 x 47 cm
+                    });
+
+                    let selectedFont = 'courier';
+                    if (withKodeMonoFont) {
+                        try {
+                            const cssResponse = await fetch('https://fonts.googleapis.com/css2?family=Kode+Mono:wght@400&display=swap');
+                            const cssText = await cssResponse.text();
+                            const urlMatch = cssText.match(/url\((https:[^)]+)\)/i);
+                            const fontUrl = urlMatch?.[1];
+
+                            if (fontUrl) {
+                                const fontResponse = await fetch(fontUrl);
+                                const fontBuffer = await fontResponse.arrayBuffer();
+                                const bytes = new Uint8Array(fontBuffer);
+                                const chunkSize = 0x8000;
+                                let binary = '';
+
+                                for (let i = 0; i < bytes.length; i += chunkSize) {
+                                    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+                                }
+
+                                const base64 = btoa(binary);
+                                pdf.addFileToVFS('KodeMono-Regular.ttf', base64);
+                                pdf.addFont('KodeMono-Regular.ttf', 'KodeMono', 'normal');
+                                selectedFont = 'KodeMono';
+                            }
+                        } catch {
+                            selectedFont = 'courier';
+                        }
+                    }
+
+                    const pageWidth = 310;
+                    const pageHeight = 470;
+                    const margin = 10;
+                    const gap = 2; // gap 2 mm
+                    const boxWidth = 22; // 2.2 cm
+                    const boxHeight = 8; // 0.8 cm
+                    const contentWidth = pageWidth - (margin * 2);
+                    const contentHeight = pageHeight - (margin * 2);
+                    const columns = Math.max(1, Math.floor((contentWidth + gap) / (boxWidth + gap)));
+                    const rows = Math.max(1, Math.floor((contentHeight + gap) / (boxHeight + gap)));
+                    const perPage = columns * rows;
+
+                    pdf.setFont(selectedFont, 'normal');
+                    pdf.setFontSize(12);
+                    pdf.setDrawColor(30, 41, 59);
+                    pdf.setTextColor(15, 23, 42);
+                    pdf.setLineWidth(0.25);
+
+                    batchTags.forEach((tag, index) => {
+                        if (index > 0 && index % perPage === 0) {
+                            pdf.addPage([310, 470], 'portrait');
+                        }
+
+                        const localIndex = index % perPage;
+                        const row = Math.floor(localIndex / columns);
+                        const column = localIndex % columns;
+                        const x = margin + (column * (boxWidth + gap));
+                        const y = margin + (row * (boxHeight + gap));
+                        const codeText = String(tag?.code || '').trim();
+
+                        pdf.rect(x, y, boxWidth, boxHeight, 'S'); // border solid
+                        pdf.text(codeText, x + (boxWidth / 2), y + (boxHeight / 2) + 1.2, {
+                            align: 'center',
+                        });
+                    });
+
+                    return pdf.output('blob');
+                };
+
+                let blob;
+                try {
+                    blob = await buildBatchPdfBlob(true);
+                } catch {
+                    blob = await buildBatchPdfBlob(false);
+                }
+
+                const filename = `${batchId}.pdf`;
+                const blobUrl = URL.createObjectURL(blob);
+
+                const link = document.createElement('a');
+                link.href = blobUrl;
+                link.download = filename;
+                document.body.appendChild(link);
+                link.click();
+                link.remove();
+
+                window.open(blobUrl, '_blank', 'noopener,noreferrer');
+                setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+                showToast(`File PDF ${filename} berhasil dibuat.`);
+            } catch (error) {
+                console.error('PDF batch generation failed:', error);
+                const errors = error?.response?.data?.errors || {};
+                showToast(getFirstErrorMessage(errors, "Gagal membuat PDF batch."), "error");
+            } finally {
+                setBatchPendingAction(batchId, false);
             }
-            const printWindow = window.open('', '_blank');
-            const htmlContent = `
-        <!DOCTYPE html>
-        <html>
-          <head>
-            <title>Print Layout - ${batchId}</title>
-            <style>
-              @page { size: 300mm 450mm; margin: 10mm; }
-              body { margin: 0; padding: 0; font-family: sans-serif; background: white; -webkit-print-color-adjust: exact; color-adjust: exact; }
-              #print-root { width: 100%; }
-              .print-container { display: flex; flex-wrap: wrap; gap: 4mm; width: 100%; align-content: flex-start; }
-              .tag-item { width: 30mm; height: 30mm; border: 1px dashed #e2e8f0; display: flex; flex-direction: column; align-items: center; justify-content: center; box-sizing: border-box; padding: 2mm; page-break-inside: avoid; }
-              .qr-mockup { width: 20mm; height: 20mm; margin-bottom: 1mm; display: flex; justify-content: center; align-items: center; }
-              .qr-mockup svg { width: 100%; height: 100%; }
-              .tag-code { font-size: 5px; font-family: monospace; text-align: center; word-break: break-all; font-weight: bold; letter-spacing: 0.5px; }
-            </style>
-            <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-            <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-            <script crossorigin src="https://unpkg.com/qrcode.react@3.1.0/lib/index.js"></script>
-          </head>
-          <body>
-            <div id="print-root"></div>
-            <script>
-              window.onload = () => {
-                const rootElement = document.getElementById('print-root');
-                const root = ReactDOM.createRoot(rootElement);
-                const tagsData = window.__BATCH_TAGS__ || [];
-                const QRCodeComponent = window.QRCodeSVG || window.QRCode?.QRCodeSVG || window.QRCode;
-                root.render(
-                  React.createElement('div', { className: 'print-container' },
-                    tagsData.map(tag => 
-                      React.createElement('div', { className: 'tag-item', key: tag.code },
-                        React.createElement('div', { className: 'qr-mockup' },
-                           React.createElement(QRCodeComponent, { value: "https://mki-auth.com/verify/" + tag.code, level: tag.ecc || "M", renderAs: "svg", width: "100%", height: "100%" })
-                        ),
-                        React.createElement('div', { className: 'tag-code' }, tag.code)
-                      )
-                    )
-                  )
-                );
-                setTimeout(() => { window.print(); }, 500);
-              };
-            </script>
-          </body>
-        </html>
-      `;
-            const dataInjection = `<script>window.__BATCH_TAGS__ = ${JSON.stringify(batchTags)};</script>`;
-            printWindow.document.write(htmlContent.replace('</head>', `${dataInjection}</head>`));
-            printWindow.document.close();
         };
 
         const filteredBatches = batches.filter(b =>
@@ -3068,7 +3203,7 @@ export default function Dashboard({ databaseBrands, databaseCategories, database
 
         return (
             <div className="space-y-6 animate-in fade-in duration-500">
-                <PageAlert text="Gunakan fitur ini untuk membuat batch Tag QR secara massal. Konfigurasi PIN dan Error Correction dapat disesuaikan secara spesifik per batch." />
+                <PageAlert text="Gunakan fitur ini untuk membuat batch Tag QR secara massal berbasis database. Saat ini mode yang aktif adalah kode verifikasi tanpa PIN." />
                 <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
                     <h3 className="font-semibold text-slate-800 mb-6 flex items-center gap-2">
                         <QrCode size={18} className="text-[#C1986E]" /> Konfigurasi Batch Baru
@@ -3115,10 +3250,11 @@ export default function Dashboard({ databaseBrands, databaseCategories, database
                                     </select>
                                 </div>
                                 <div className="flex items-center justify-between bg-white px-4 py-2.5 rounded-lg border border-slate-200 h-[42px]">
-                                    <label className="text-sm font-medium text-slate-600">Gunakan PIN</label>
+                                    <label className="text-sm font-medium text-slate-600">Gunakan PIN (Segera)</label>
                                     <ToggleSwitch
                                         checked={tagConfig.usePin}
-                                        onChange={() => setTagConfig({ ...tagConfig, usePin: !tagConfig.usePin })}
+                                        onChange={() => { }}
+                                        disabled
                                     />
                                 </div>
                                 {tagConfig.usePin && (
@@ -3148,7 +3284,7 @@ export default function Dashboard({ databaseBrands, databaseCategories, database
                             </div>
                         </div>
                         <div className="flex justify-end pt-4 border-t border-slate-100">
-                            <button type="submit" className="bg-[#C1986E] hover:bg-[#A37E58] text-white px-8 py-2.5 rounded-lg font-medium transition-all active:scale-95 flex items-center gap-2">
+                            <button type="submit" disabled={isSavingBatch} className="bg-[#C1986E] hover:bg-[#A37E58] text-white px-8 py-2.5 rounded-lg font-medium transition-all active:scale-95 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
                                 <Hash size={18} /> Generate Batch Sekarang
                             </button>
                         </div>
@@ -3193,8 +3329,10 @@ export default function Dashboard({ databaseBrands, databaseCategories, database
                             {filteredBatches.length === 0 ? (
                                 <tr><td colSpan="5" className="text-center py-8 text-slate-400 text-sm">Tidak ada riwayat batch yang ditemukan.</td></tr>
                             ) : (
-                                filteredBatches.map(batch => (
-                                    <tr key={batch.id} className={`transition-colors ${batch.status === 'Suspended' ? 'bg-red-50/30' : 'hover:bg-slate-50'}`}>
+                                filteredBatches.map(batch => {
+                                    const isPending = isBatchPendingAction(batch.id);
+                                    return (
+                                    <tr key={batch.id} className={`transition-colors ${batch.status === 'Suspended' ? 'bg-red-50/30' : 'hover:bg-slate-50'} ${isPending ? 'opacity-60' : ''}`}>
                                         <td className="px-6 py-4">
                                             <div className="flex items-center gap-2 mb-1">
                                                 <p className="font-mono text-sm font-semibold text-slate-800 bg-slate-100 px-2 py-0.5 rounded inline-block">{batch.id}</p>
@@ -3227,26 +3365,27 @@ export default function Dashboard({ databaseBrands, databaseCategories, database
                                             <div className="flex items-center justify-center gap-2">
                                                 <Tooltip text={batch.status === 'Generated' ? "Suspend / Recall Batch" : "Aktifkan Kembali Batch"} position="top">
                                                     <button
+                                                        disabled={isPending}
                                                         onClick={() => handleToggleBatchStatus(batch.id, batch.status)}
-                                                        className={`p-1.5 rounded-lg transition-all active:scale-95 ${batch.status === 'Generated' ? 'text-slate-400 hover:text-orange-600 hover:bg-orange-50' : 'text-red-500 hover:text-emerald-600 hover:bg-emerald-50'}`}
+                                                        className={`p-1.5 rounded-lg transition-all active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed ${batch.status === 'Generated' ? 'text-slate-400 hover:text-orange-600 hover:bg-orange-50' : 'text-red-500 hover:text-emerald-600 hover:bg-emerald-50'}`}
                                                     >
                                                         <AlertCircle size={16} />
                                                     </button>
                                                 </Tooltip>
-                                                <Tooltip text="Print / Cetak Barcode" position="top">
-                                                    <button onClick={() => handlePrintBatch(batch.id)} className="text-slate-400 hover:text-blue-500 hover:bg-blue-50 transition-all p-1.5 rounded-lg active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed" disabled={batch.status === 'Suspended'}>
-                                                        <Printer size={16} />
+                                                <Tooltip text="Download PDF" position="top">
+                                                    <button onClick={() => handleDownloadBatchPdf(batch.id)} className="text-slate-400 hover:text-blue-500 hover:bg-blue-50 transition-all p-1.5 rounded-lg active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed" disabled={batch.status === 'Suspended' || isPending}>
+                                                        <Download size={16} />
                                                     </button>
                                                 </Tooltip>
                                                 <Tooltip text="Hapus Seluruh Batch" position="top">
-                                                    <button onClick={() => handleDeleteBatch(batch.id)} className="text-slate-400 hover:text-red-500 hover:bg-red-50 transition-all p-1.5 rounded-lg active:scale-95">
+                                                    <button disabled={isPending} onClick={() => handleDeleteBatch(batch.id)} className="text-slate-400 hover:text-red-500 hover:bg-red-50 transition-all p-1.5 rounded-lg active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed">
                                                         <Trash2 size={16} />
                                                     </button>
                                                 </Tooltip>
                                             </div>
                                         </td>
                                     </tr>
-                                ))
+                                )})
                             )}
                         </tbody>
                     </table>
@@ -3272,11 +3411,13 @@ export default function Dashboard({ databaseBrands, databaseCategories, database
                             <div className="p-6 bg-slate-50">
                                 <p className="text-xs text-slate-500 mb-1 uppercase font-semibold">Batch ID</p>
                                 <p className="font-mono text-sm bg-white border border-slate-200 py-2 rounded-lg text-slate-800 font-bold tracking-widest">{generatedQR.batchId}</p>
+                                <p className="text-xs text-slate-500 mb-1 mt-4 uppercase font-semibold">Contoh Kode Verifikasi</p>
+                                <p className="font-mono text-xs bg-white border border-slate-200 py-2 rounded-lg text-slate-800 font-bold tracking-wider">{generatedQR.code || '-'}</p>
                             </div>
                             <div className="p-4 flex gap-3">
                                 <button onClick={() => setIsTagModalOpen(false)} className="flex-1 py-2.5 rounded-lg font-medium text-slate-600 bg-white border border-slate-200 hover:bg-slate-50 transition-all active:scale-95 text-sm">Tutup</button>
-                                <button onClick={() => { setIsTagModalOpen(false); handlePrintBatch(generatedQR.batchId); }} className="flex-1 py-2.5 rounded-lg font-medium text-white bg-blue-600 hover:bg-blue-700 transition-all shadow-sm active:scale-95 text-sm flex items-center justify-center gap-2">
-                                    <Printer size={16} /> Cetak Batch
+                                <button onClick={() => { setIsTagModalOpen(false); handleDownloadBatchPdf(generatedQR.batchId); }} className="flex-1 py-2.5 rounded-lg font-medium text-white bg-blue-600 hover:bg-blue-700 transition-all shadow-sm active:scale-95 text-sm flex items-center justify-center gap-2">
+                                    <Download size={16} /> Download PDF
                                 </button>
                             </div>
                         </div>

@@ -3,6 +3,7 @@
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\BrandController;
 use App\Http\Controllers\CategoryController;
+use App\Http\Controllers\TagBatchController;
 use App\Http\Controllers\UserManagementController;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
@@ -41,6 +42,12 @@ Route::middleware('auth')->group(function () {
     Route::post('/users/{user}/status', [UserManagementController::class, 'updateStatus'])->name('users.status');
     Route::delete('/users/{user}', [UserManagementController::class, 'destroy'])->name('users.destroy');
     Route::post('/users/{user}/reset-password', [UserManagementController::class, 'resetPassword'])->name('users.reset-password');
+
+    // Rute API untuk Generate Tag / QR
+    Route::post('/tag-batches', [TagBatchController::class, 'store'])->name('tag-batches.store');
+    Route::post('/tag-batches/{tagBatch}/status', [TagBatchController::class, 'updateStatus'])->name('tag-batches.status');
+    Route::delete('/tag-batches/{tagBatch}', [TagBatchController::class, 'destroy'])->name('tag-batches.destroy');
+    Route::get('/tag-batches/{tagBatch}/codes', [TagBatchController::class, 'codes'])->name('tag-batches.codes');
 });
 
 require __DIR__ . '/auth.php';
