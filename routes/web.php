@@ -16,7 +16,7 @@ Route::get('/', function () {
 });
 
 // Perubahan di sini: Rute dashboard sekarang memanggil fungsi 'index' di BrandController
-Route::get('/dashboard', [BrandController::class, 'index'])
+Route::get('adminmki', [BrandController::class, 'index'])
     ->middleware(['auth', 'verified'])
     ->name('dashboard');
 
