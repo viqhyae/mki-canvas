@@ -5,6 +5,7 @@ use App\Http\Controllers\BrandController;
 use App\Http\Controllers\CategoryController;
 use App\Http\Controllers\ProductVerificationController;
 use App\Http\Controllers\ProductSkuController;
+use App\Http\Controllers\ScanActivityController;
 use App\Http\Controllers\TagBatchController;
 use App\Http\Controllers\UserManagementController;
 use Illuminate\Support\Facades\Route;
@@ -57,6 +58,9 @@ Route::middleware('auth')->group(function () {
     Route::post('/tag-batches/{tagBatch}/status', [TagBatchController::class, 'updateStatus'])->name('tag-batches.status');
     Route::delete('/tag-batches/{tagBatch}', [TagBatchController::class, 'destroy'])->name('tag-batches.destroy');
     Route::get('/tag-batches/{tagBatch}/codes', [TagBatchController::class, 'codes'])->name('tag-batches.codes');
+
+    // Rute API untuk aktivitas scan
+    Route::get('/scan-activities', [ScanActivityController::class, 'index'])->name('scan-activities.index');
 });
 
 require __DIR__ . '/auth.php';

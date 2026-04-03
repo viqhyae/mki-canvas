@@ -30,6 +30,7 @@ export default function AdminPanel({
     databaseUsers,
     databaseTagBatches,
     databaseProducts,
+    databaseScanLogs,
 }) {
     const authUser = usePage().props?.auth?.user || null;
     const [activeTab, setActiveTab] = useState('dashboard');
@@ -64,7 +65,7 @@ export default function AdminPanel({
     const [productSort, setProductSort] = useState({ key: 'id', direction: 'desc' });
     const [userSort, setUserSort] = useState({ key: 'id', direction: 'desc' });
     const [batchSort, setBatchSort] = useState({ key: 'id', direction: 'desc' });
-    const [scanSort, setScanSort] = useState({ key: 'time', direction: 'asc' });
+    const [scanSort, setScanSort] = useState({ key: 'time', direction: 'desc' });
 
     // Helper handler untuk klik header tabel
     const handleSortChange = (key, sortConfig, setSortConfig) => {
@@ -155,6 +156,22 @@ export default function AdminPanel({
             ? product.dynamicFields
             : {},
         updated_at: product?.updated_at || null,
+    });
+    const normalizeScanLogRecord = (log) => ({
+        id: Number(log?.id || 0),
+        time: String(log?.time || '').trim(),
+        scannedAt: log?.scannedAt || null,
+        tagCode: String(log?.tagCode || '').trim(),
+        productName: String(log?.productName || 'Unknown / Invalid').trim() || 'Unknown / Invalid',
+        brand: String(log?.brand || 'N/A').trim() || 'N/A',
+        location: String(log?.location || 'Tidak Diketahui').trim() || 'Tidak Diketahui',
+        ip: String(log?.ip || '-').trim() || '-',
+        scanCount: Number(log?.scanCount || 0),
+        status: String(log?.status || 'Invalid').trim() || 'Invalid',
+        tagStatus: String(log?.tagStatus || '-').trim() || '-',
+        userAgent: String(log?.userAgent || '-').trim() || '-',
+        latitude: log?.latitude ?? null,
+        longitude: log?.longitude ?? null,
     });
     const createEmptyUserInput = () => ({ name: '', email: '', role: 'Brand Owner', password: '', status: 1 });
     const createEmptyProductInput = () => ({
@@ -506,6 +523,8 @@ export default function AdminPanel({
     };
 
     const [products, setProducts] = useState((databaseProducts || []).map(normalizeProductRecord));
+    const [scanLogs, setScanLogs] = useState((databaseScanLogs || []).map(normalizeScanLogRecord));
+    const [isRefreshingScanLogs, setIsRefreshingScanLogs] = useState(false);
 
     const [batches, setBatches] = useState((databaseTagBatches || []).map(normalizeBatchRecord));
     const [isSavingBatch, setIsSavingBatch] = useState(false);
@@ -626,6 +645,48 @@ export default function AdminPanel({
     useEffect(() => {
         setProducts((databaseProducts || []).map(normalizeProductRecord));
     }, [databaseProducts]);
+
+    useEffect(() => {
+        setScanLogs((databaseScanLogs || []).map(normalizeScanLogRecord));
+    }, [databaseScanLogs]);
+
+    useEffect(() => {
+        if (activeTab !== 'scan_history') {
+            return;
+        }
+
+        let isActive = true;
+        const fetchScanActivities = (showLoader = false) => {
+            if (showLoader) {
+                setIsRefreshingScanLogs(true);
+            }
+
+            axios.get('/scan-activities')
+                .then((response) => {
+                    if (!isActive) return;
+                    const logs = Array.isArray(response?.data?.logs) ? response.data.logs : [];
+                    setScanLogs(logs.map(normalizeScanLogRecord));
+                })
+                .catch(() => {
+                    // Silent by design: keep existing logs if refresh fails.
+                })
+                .finally(() => {
+                    if (!isActive) return;
+                    if (showLoader) {
+                        setIsRefreshingScanLogs(false);
+                    }
+                });
+        };
+
+        fetchScanActivities(false);
+        const intervalId = setInterval(() => fetchScanActivities(true), 5000);
+
+        return () => {
+            isActive = false;
+            clearInterval(intervalId);
+            setIsRefreshingScanLogs(false);
+        };
+    }, [activeTab]);
 
     useEffect(() => {
         return () => {
@@ -1741,8 +1802,10 @@ export default function AdminPanel({
         setRequireGps,
         emailNotif,
         setEmailNotif,
+        scanLogs,
         statusFilter,
         setStatusFilter,
+        isRefreshingScanLogs,
     });
 
     const SidebarItem = ({ icon: Icon, label, id, isSub = false }) => (

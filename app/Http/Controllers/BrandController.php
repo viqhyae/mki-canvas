@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Brand;
 use App\Models\ProductCategory;
 use App\Models\ProductSku;
+use App\Models\ScanActivity;
 use App\Models\TagBatch;
 use App\Models\User;
 use Illuminate\Http\Request;
@@ -20,6 +21,7 @@ class BrandController extends Controller {
     public function index() {
         $databaseCategories = [];
         $databaseProducts = [];
+        $databaseScanLogs = [];
         $databaseUsers = [];
         $databaseTagBatches = [];
 
@@ -102,6 +104,15 @@ class BrandController extends Controller {
                 ->all();
         }
 
+        if (Schema::hasTable('scan_activities')) {
+            $databaseScanLogs = ScanActivity::query()
+                ->latest('id')
+                ->limit(500)
+                ->get()
+                ->map(fn (ScanActivity $scanActivity) => $this->scanActivityPayload($scanActivity))
+                ->all();
+        }
+
         return Inertia::render('AdminPanel', [
             'databaseBrands' => Brand::query()
                 ->latest('id')
@@ -110,6 +121,7 @@ class BrandController extends Controller {
                 ->all(),
             'databaseCategories' => $databaseCategories,
             'databaseProducts' => $databaseProducts,
+            'databaseScanLogs' => $databaseScanLogs,
             'databaseUsers' => $databaseUsers,
             'databaseTagBatches' => $databaseTagBatches,
         ]);
@@ -319,6 +331,26 @@ class BrandController extends Controller {
             'catL3' => (int) ($productSku->category_l3_id ?? 0),
             'dynamicFields' => is_array($productSku->dynamic_fields) ? $productSku->dynamic_fields : [],
             'updated_at' => optional($productSku->updated_at)->toISOString(),
+        ];
+    }
+
+    private function scanActivityPayload(ScanActivity $scanActivity): array
+    {
+        return [
+            'id' => $scanActivity->id,
+            'time' => optional($scanActivity->scanned_at)->format('d M Y, H:i:s'),
+            'scannedAt' => optional($scanActivity->scanned_at)->toISOString(),
+            'tagCode' => $scanActivity->verification_code ?: $scanActivity->scanned_code,
+            'productName' => $scanActivity->product_name ?: 'Unknown / Invalid',
+            'brand' => $scanActivity->brand_name ?: 'N/A',
+            'location' => $scanActivity->location_label ?: 'Tidak Diketahui',
+            'ip' => $scanActivity->ip_address ?: '-',
+            'scanCount' => (int) $scanActivity->scan_count,
+            'status' => $scanActivity->result_status ?: 'Invalid',
+            'tagStatus' => $scanActivity->tag_status ?: '-',
+            'userAgent' => $scanActivity->user_agent ?: '-',
+            'latitude' => $scanActivity->latitude,
+            'longitude' => $scanActivity->longitude,
         ];
     }
 

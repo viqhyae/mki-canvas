@@ -8,6 +8,96 @@ export default function Welcome() {
     const [errorMessage, setErrorMessage] = useState('');
     const [isChecking, setIsChecking] = useState(false);
 
+    const LOCATION_LOOKUP_TIMEOUT_MS = 2500;
+
+    const toCleanLabel = (value) => String(value || '').trim();
+
+    const formatCoordinateLabel = (latitude, longitude) =>
+        `Lat ${latitude.toFixed(5)}, Lng ${longitude.toFixed(5)}`;
+
+    const getTimezoneCityLabel = () => {
+        const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+        if (!timezone.includes('/')) {
+            return '';
+        }
+
+        const timezoneParts = timezone.split('/');
+        const lastPart = timezoneParts[timezoneParts.length - 1] || '';
+        return toCleanLabel(lastPart.replaceAll('_', ' '));
+    };
+
+    const fetchCityFromCoordinates = async (latitude, longitude) => {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), LOCATION_LOOKUP_TIMEOUT_MS);
+
+        try {
+            const reverseGeocodeUrl = new URL('https://api.bigdatacloud.net/data/reverse-geocode-client');
+            reverseGeocodeUrl.searchParams.set('latitude', String(latitude));
+            reverseGeocodeUrl.searchParams.set('longitude', String(longitude));
+            reverseGeocodeUrl.searchParams.set('localityLanguage', 'id');
+
+            const response = await fetch(reverseGeocodeUrl.toString(), {
+                method: 'GET',
+                signal: controller.signal,
+            });
+
+            if (!response.ok) {
+                return '';
+            }
+
+            const payload = await response.json();
+            const cityCandidates = [
+                payload?.city,
+                payload?.locality,
+                payload?.localityInfo?.administrative?.find((item) => item?.order === 3)?.name,
+                payload?.localityInfo?.administrative?.find((item) => item?.order === 2)?.name,
+                payload?.principalSubdivision,
+            ];
+
+            return cityCandidates.map(toCleanLabel).find((item) => item !== '') || '';
+        } catch {
+            return '';
+        } finally {
+            clearTimeout(timeoutId);
+        }
+    };
+
+    const getCheckerLocationPayload = async () => {
+        const timezoneCity = getTimezoneCityLabel();
+        const fallback = timezoneCity !== '' ? { location_label: timezoneCity } : {};
+
+        if (typeof window === 'undefined' || !navigator?.geolocation) {
+            return fallback;
+        }
+
+        try {
+            const position = await new Promise((resolve, reject) => {
+                navigator.geolocation.getCurrentPosition(resolve, reject, {
+                    enableHighAccuracy: false,
+                    timeout: 1500,
+                    maximumAge: 60000,
+                });
+            });
+
+            const latitude = Number(position.coords.latitude);
+            const longitude = Number(position.coords.longitude);
+
+            if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+                return fallback;
+            }
+            const cityLabel = await fetchCityFromCoordinates(latitude, longitude);
+            const locationLabel = toCleanLabel(cityLabel) || fallback.location_label || formatCoordinateLabel(latitude, longitude);
+
+            return {
+                location_label: locationLabel,
+                latitude,
+                longitude,
+            };
+        } catch {
+            return fallback;
+        }
+    };
+
     const handleCheckCode = async (event) => {
         event.preventDefault();
         setResult(null);
@@ -21,8 +111,23 @@ export default function Welcome() {
 
         setIsChecking(true);
         try {
+            const checkerLocation = await getCheckerLocationPayload();
+            const params = { code: cleanedCode };
+
+            if (checkerLocation.location_label) {
+                params.location_label = checkerLocation.location_label;
+            }
+
+            if (
+                checkerLocation.latitude !== undefined &&
+                checkerLocation.longitude !== undefined
+            ) {
+                params.latitude = checkerLocation.latitude;
+                params.longitude = checkerLocation.longitude;
+            }
+
             const response = await axios.get(route('public.verify-code'), {
-                params: { code: cleanedCode },
+                params,
             });
 
             setResult(response.data);
