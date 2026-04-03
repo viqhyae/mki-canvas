@@ -20,23 +20,12 @@ class TagBatchController extends Controller
             'brand_name' => 'nullable|string|max:255',
             'brand_code' => 'nullable|string|max:50',
             'quantity' => 'required|integer|min:1|max:10000',
-            'id_length' => 'required|integer|in:8,10,12',
-            'error_correction' => ['required', 'string', Rule::in(['M', 'H'])],
-            'use_pin' => 'nullable|boolean',
-            'pin_length' => 'nullable|integer|in:4,6',
+            'random_length' => 'required|integer|in:5,6,7',
         ]);
 
-        if ((bool) ($validated['use_pin'] ?? false)) {
-            return response()->json([
-                'errors' => [
-                    'use_pin' => ['Mode PIN belum diaktifkan. Saat ini sistem hanya mendukung kode verifikasi tanpa PIN.'],
-                ],
-            ], 422);
-        }
-
         $quantity = (int) $validated['quantity'];
-        $idLength = (int) $validated['id_length'];
-        $errorCorrection = (string) $validated['error_correction'];
+        $randomLength = (int) $validated['random_length'];
+        $errorCorrection = 'M';
         $productName = trim((string) $validated['product_name']);
         $brandName = trim((string) ($validated['brand_name'] ?? ''));
 
@@ -44,7 +33,7 @@ class TagBatchController extends Controller
             try {
                 $result = DB::transaction(function () use (
                     $quantity,
-                    $idLength,
+                    $randomLength,
                     $errorCorrection,
                     $productName,
                     $brandName
@@ -55,7 +44,7 @@ class TagBatchController extends Controller
                         'product_name' => $productName,
                         'brand_name' => $brandName !== '' ? $brandName : null,
                         'quantity' => $quantity,
-                        'id_length' => $idLength,
+                        'id_length' => $randomLength,
                         'error_correction' => $errorCorrection,
                         'use_pin' => false,
                         'pin_length' => null,
@@ -65,7 +54,7 @@ class TagBatchController extends Controller
 
                     $verificationCodes = $this->generateUniqueVerificationCodes(
                         $quantity,
-                        $idLength
+                        $randomLength
                     );
 
                     $insertRows = [];
@@ -169,14 +158,14 @@ class TagBatchController extends Controller
         return $candidate;
     }
 
-    private function generateUniqueVerificationCodes(int $quantity, int $idLength): array
+    private function generateUniqueVerificationCodes(int $quantity, int $randomLength): array
     {
         $codes = [];
         $maxRounds = 25;
 
         for ($round = 0; $round < $maxRounds; $round++) {
             while (count($codes) < $quantity) {
-                $candidate = strtoupper(Str::random($idLength));
+                $candidate = strtoupper(Str::random($randomLength));
 
                 $codes[$candidate] = true;
             }
@@ -224,9 +213,7 @@ class TagBatchController extends Controller
             'lastCode' => $tagBatch->last_code,
             'status' => $tagBatch->status,
             'settings' => [
-                'ecc' => (string) $tagBatch->error_correction,
-                'idLength' => (int) $tagBatch->id_length . ' Karakter',
-                'pin' => 'Tidak',
+                'randomLength' => (int) $tagBatch->id_length . ' Karakter',
             ],
             'created_at' => optional($tagBatch->created_at)->toISOString(),
             'updated_at' => optional($tagBatch->updated_at)->toISOString(),

@@ -276,9 +276,7 @@ class BrandController extends Controller {
             'lastCode' => $tagBatch->last_code,
             'status' => $tagBatch->status,
             'settings' => [
-                'ecc' => (string) $tagBatch->error_correction,
-                'idLength' => (int) $tagBatch->id_length . ' Karakter',
-                'pin' => $tagBatch->use_pin ? ('Ya (' . (int) ($tagBatch->pin_length ?? 0) . ' Digit)') : 'Tidak',
+                'randomLength' => (int) $tagBatch->id_length . ' Karakter',
             ],
             'created_at' => optional($tagBatch->created_at)->toISOString(),
             'updated_at' => optional($tagBatch->updated_at)->toISOString(),

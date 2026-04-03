@@ -493,6 +493,12 @@ export default function Dashboard({ databaseBrands, databaseCategories, database
         role: normalizeUserRole(user?.role),
         status: normalizeUserStatus(user?.status),
     });
+    const normalizeBatchRandomLength = (settings) => {
+        const value = settings?.randomLength ?? settings?.idLength;
+        if (typeof value === 'number') return `${value} Karakter`;
+        const safeValue = String(value || '').trim();
+        return safeValue !== '' ? safeValue : '5 Karakter';
+    };
     const normalizeBatchRecord = (batch) => ({
         id: String(batch?.id || ''),
         date: batch?.date || '',
@@ -503,9 +509,7 @@ export default function Dashboard({ databaseBrands, databaseCategories, database
         lastCode: batch?.lastCode || '',
         status: batch?.status === 'Suspended' ? 'Suspended' : 'Generated',
         settings: {
-            ecc: batch?.settings?.ecc || 'M',
-            idLength: batch?.settings?.idLength || '8 Karakter',
-            pin: batch?.settings?.pin || 'Tidak',
+            randomLength: normalizeBatchRandomLength(batch?.settings),
         },
     });
     const createEmptyUserInput = () => ({ name: '', email: '', role: 'Brand Owner', password: '', status: 1 });
@@ -863,7 +867,7 @@ export default function Dashboard({ databaseBrands, databaseCategories, database
     const [passwordData, setPasswordData] = useState({ userId: null, userName: '', newPassword: '', confirmPassword: '' });
 
     const [tagConfig, setTagConfig] = useState({
-        productId: '', quantity: 100, idLength: 8, usePin: false, pinLength: 6, errorCorrection: 'M'
+        productId: '', quantity: 100, randomLength: 5
     });
     const [isTagModalOpen, setIsTagModalOpen] = useState(false);
     const [generatedQR, setGeneratedQR] = useState(null);
@@ -1635,10 +1639,7 @@ export default function Dashboard({ databaseBrands, databaseCategories, database
             brand_name: product.brandName || relatedBrand?.name || '',
             brand_code: relatedBrand?.brand_code || '',
             quantity: qty,
-            id_length: Number(tagConfig.idLength) || 8,
-            error_correction: tagConfig.errorCorrection || 'M',
-            use_pin: false,
-            pin_length: null,
+            random_length: Number(tagConfig.randomLength) || 5,
         })
             .then((response) => {
                 const createdBatch = normalizeBatchRecord(response?.data?.batch || {});
@@ -1652,10 +1653,7 @@ export default function Dashboard({ databaseBrands, databaseCategories, database
                     productName: createdBatch.productName,
                     count: createdBatch.qty,
                     batchId: createdBatch.id,
-                    ecc: createdBatch.settings?.ecc || 'M',
-                    idLength: Number(tagConfig.idLength) || 8,
-                    usePin: false,
-                    pinLength: 0,
+                    randomLength: Number(tagConfig.randomLength) || 5,
                 });
                 setIsTagModalOpen(true);
                 showToast(`Batch ${createdBatch.id} berhasil dibuat!`);
@@ -3236,49 +3234,17 @@ export default function Dashboard({ databaseBrands, databaseCategories, database
                         </div>
                         <div className="space-y-4 bg-slate-50 p-5 rounded-xl border border-slate-100">
                             <h4 className="text-sm font-semibold text-slate-700 mb-2 border-b border-slate-200 pb-3">Pengaturan Tag & Keamanan</h4>
-                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5 items-end">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-5 items-end">
                                 <div className="space-y-1.5">
-                                    <label className="text-xs font-semibold text-slate-500 uppercase">Panjang ID Acak</label>
+                                    <label className="text-xs font-semibold text-slate-500 uppercase">Panjang PIN Acak</label>
                                     <select
                                         className="w-full border border-slate-200 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-[#C1986E] bg-white text-sm h-[42px]"
-                                        value={tagConfig.idLength}
-                                        onChange={(e) => setTagConfig({ ...tagConfig, idLength: Number(e.target.value) })}
+                                        value={tagConfig.randomLength}
+                                        onChange={(e) => setTagConfig({ ...tagConfig, randomLength: Number(e.target.value) })}
                                     >
-                                        <option value={8}>8 Karakter (Standar)</option>
-                                        <option value={10}>10 Karakter</option>
-                                        <option value={12}>12 Karakter</option>
-                                    </select>
-                                </div>
-                                <div className="flex items-center justify-between bg-white px-4 py-2.5 rounded-lg border border-slate-200 h-[42px]">
-                                    <label className="text-sm font-medium text-slate-600">Gunakan PIN (Segera)</label>
-                                    <ToggleSwitch
-                                        checked={tagConfig.usePin}
-                                        onChange={() => { }}
-                                        disabled
-                                    />
-                                </div>
-                                {tagConfig.usePin && (
-                                    <div className="space-y-1.5 animate-in fade-in slide-in-from-left-2 duration-300">
-                                        <label className="text-xs font-semibold text-slate-500 uppercase">Panjang PIN (Digit)</label>
-                                        <select
-                                            className="w-full border border-slate-200 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-[#C1986E] bg-white text-sm h-[42px]"
-                                            value={tagConfig.pinLength}
-                                            onChange={(e) => setTagConfig({ ...tagConfig, pinLength: Number(e.target.value) })}
-                                        >
-                                            <option value={4}>4 Digit</option>
-                                            <option value={6}>6 Digit</option>
-                                        </select>
-                                    </div>
-                                )}
-                                <div className="space-y-1.5">
-                                    <label className="text-xs font-semibold text-slate-500 uppercase">QR Error Correction</label>
-                                    <select
-                                        className="w-full border border-slate-200 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-[#C1986E] bg-white text-sm h-[42px]"
-                                        value={tagConfig.errorCorrection}
-                                        onChange={(e) => setTagConfig({ ...tagConfig, errorCorrection: e.target.value })}
-                                    >
-                                        <option value="M">Level M (15% recovery)</option>
-                                        <option value="H">Level H (30% recovery)</option>
+                                        <option value={5}>5 Karakter</option>
+                                        <option value={6}>6 Karakter</option>
+                                        <option value={7}>7 Karakter</option>
                                     </select>
                                 </div>
                             </div>
@@ -3317,7 +3283,7 @@ export default function Dashboard({ databaseBrands, databaseCategories, database
                                     <div className="flex items-center gap-2">Produk SKU <SortIcon columnKey="product" sortConfig={batchSort} /></div>
                                 </th>
                                 <th className="px-6 py-4 font-semibold text-slate-600 text-sm cursor-pointer hover:bg-slate-100 transition-colors group select-none" onClick={() => handleSortChange('qty', batchSort, setBatchSort)}>
-                                    <div className="flex items-center gap-2">Jumlah & Keamanan <SortIcon columnKey="qty" sortConfig={batchSort} /></div>
+                                    <div className="flex items-center gap-2">Jumlah & Kode <SortIcon columnKey="qty" sortConfig={batchSort} /></div>
                                 </th>
                                 <th className="px-6 py-4 font-semibold text-slate-600 text-sm cursor-pointer hover:bg-slate-100 transition-colors group select-none" onClick={() => handleSortChange('status', batchSort, setBatchSort)}>
                                     <div className="flex items-center gap-2">Status <SortIcon columnKey="status" sortConfig={batchSort} /></div>
@@ -3346,8 +3312,7 @@ export default function Dashboard({ databaseBrands, databaseCategories, database
                                         <td className="px-6 py-4">
                                             <p className="text-sm font-semibold text-slate-700">{batch.qty} <span className="text-xs font-normal text-slate-500">Tag</span></p>
                                             <div className="flex items-center gap-2 mt-1">
-                                                <span className="text-[10px] bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded font-medium border border-blue-100">PIN: {batch.settings.pin}</span>
-                                                <span className="text-[10px] bg-purple-50 text-purple-600 px-1.5 py-0.5 rounded font-medium border border-purple-100">ECC: {batch.settings.ecc}</span>
+                                                <span className="text-[10px] bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded font-medium border border-blue-100">Panjang PIN Acak: {batch.settings.randomLength}</span>
                                             </div>
                                         </td>
                                         <td className="px-6 py-4">
