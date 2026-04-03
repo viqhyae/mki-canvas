@@ -8,14 +8,21 @@ return new class extends Migration
 {
     public function up(): void
     {
+        if (!Schema::hasTable('brands') || Schema::hasColumn('brands', 'logo_url')) {
+            return;
+        }
+
         Schema::table('brands', function (Blueprint $table) {
-            // Menambahkan kolom logo_url setelah kolom description
             $table->string('logo_url')->nullable()->after('description');
         });
     }
 
     public function down(): void
     {
+        if (!Schema::hasTable('brands') || !Schema::hasColumn('brands', 'logo_url')) {
+            return;
+        }
+
         Schema::table('brands', function (Blueprint $table) {
             $table->dropColumn('logo_url');
         });

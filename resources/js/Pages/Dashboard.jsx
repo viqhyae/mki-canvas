@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, startTransition } from 'react';
 import {
     LayoutDashboard,
     Building2,
@@ -26,7 +26,6 @@ import {
     ListTree,
     UploadCloud,
     QrCode,
-    Printer,
     RefreshCw,
     FileArchive,
     Download,
@@ -53,9 +52,10 @@ import {
     Droplets,
     Sparkles
 } from 'lucide-react';
-import { router } from '@inertiajs/react';
+import { router, usePage } from '@inertiajs/react';
 import axios from 'axios';
 import { createPortal } from 'react-dom';
+import { jsPDF } from 'jspdf';
 // Import QRCode untuk generate QR berbasis Vektor (SVG)
 import { QRCodeSVG } from 'qrcode.react';
 
@@ -397,7 +397,8 @@ const LeafletMap = () => {
     );
 };
 
-export default function Dashboard({ databaseBrands, databaseCategories }) {
+export default function Dashboard({ databaseBrands, databaseCategories, databaseUsers, databaseTagBatches }) {
+    const authUser = usePage().props?.auth?.user || null;
     const [activeTab, setActiveTab] = useState('dashboard');
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
     const [isMasterDataOpen, setIsMasterDataOpen] = useState(true);
@@ -477,16 +478,197 @@ export default function Dashboard({ databaseBrands, databaseCategories }) {
     };
 
     // --- STATE DATA ---
-    const [systemUsers, setSystemUsers] = useState([
-        { id: 1, name: "Admin Utama", email: "admin@mki.co.id", role: "Super Admin", status: "Aktif" },
-        { id: 2, name: "Bapak Owner", email: "owner@mki.co.id", role: "Brand Owner", status: "Aktif" },
-        { id: 3, name: "Ibu Clara", email: "clara@glowco.id", role: "Brand Owner", status: "Aktif" },
-        { id: 4, name: "Bapak Andi", email: "andi@mensgroom.id", role: "Brand Owner", status: "Aktif" }
-    ]);
-
     const normalizeBrandStatus = (status) => (
         status === 1 || status === '1' || status === true || status === 'Aktif' ? 1 : 0
     );
+    const normalizeUserStatus = (status) => (
+        status === 1 || status === '1' || status === true || status === 'Aktif' ? 1 : 0
+    );
+    const isUserActive = (status) => normalizeUserStatus(status) === 1;
+    const normalizeUserRole = (role) => role === 'Super Admin' ? 'Super Admin' : 'Brand Owner';
+    const normalizeUserRecord = (user) => ({
+        ...user,
+        name: user?.name || '',
+        email: user?.email || '',
+        role: normalizeUserRole(user?.role),
+        status: normalizeUserStatus(user?.status),
+    });
+    const normalizeBatchRandomLength = (settings) => {
+        const value = settings?.randomLength ?? settings?.idLength;
+        if (typeof value === 'number') return `${value} Karakter`;
+        const safeValue = String(value || '').trim();
+        return safeValue !== '' ? safeValue : '5 Karakter';
+    };
+    const normalizeBatchRecord = (batch) => ({
+        id: String(batch?.id || ''),
+        date: batch?.date || '',
+        productName: batch?.productName || '',
+        brandName: batch?.brandName || '-',
+        qty: Number(batch?.qty || 0),
+        firstCode: batch?.firstCode || '',
+        lastCode: batch?.lastCode || '',
+        status: batch?.status === 'Suspended' ? 'Suspended' : 'Generated',
+        settings: {
+            randomLength: normalizeBatchRandomLength(batch?.settings),
+        },
+    });
+    const createEmptyUserInput = () => ({ name: '', email: '', role: 'Brand Owner', password: '', status: 1 });
+    const normalizeComparableId = (value) => String(value ?? '');
+    const isSameEntityId = (left, right) => normalizeComparableId(left) === normalizeComparableId(right);
+    const generateTempNumericId = () => (Date.now() * 1000) + Math.floor(Math.random() * 1000);
+    const getUserInitials = (fullName) => {
+        const words = String(fullName || '').trim().split(/\s+/).filter(Boolean);
+        if (words.length === 0) return 'U';
+        if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+        return (words[0][0] + words[1][0]).toUpperCase();
+    };
+
+    const syncBrandsFromUserMutation = (currentBrands, oldName, newName, oldRole, newRole) => {
+        const safeOldName = (oldName || '').trim();
+        const safeNewName = (newName || '').trim();
+        const wasBrandOwner = normalizeUserRole(oldRole) === 'Brand Owner';
+        const isBrandOwner = normalizeUserRole(newRole) === 'Brand Owner';
+
+        let nextBrands = currentBrands;
+
+        if (safeOldName !== '' && safeOldName !== safeNewName) {
+            nextBrands = nextBrands.map((brand) =>
+                (brand.owner_name || '').trim() === safeOldName
+                    ? { ...brand, owner_name: safeNewName }
+                    : brand
+            );
+        }
+
+        if (wasBrandOwner && !isBrandOwner && safeNewName !== '') {
+            nextBrands = nextBrands.map((brand) =>
+                (brand.owner_name || '').trim() === safeNewName
+                    ? { ...brand, owner_name: '' }
+                    : brand
+            );
+        }
+
+        return nextBrands;
+    };
+
+    const detachBrandsFromDeletedOwner = (currentBrands, ownerName, ownerRole) => {
+        const safeOwnerName = (ownerName || '').trim();
+        if (safeOwnerName === '' || normalizeUserRole(ownerRole) !== 'Brand Owner') {
+            return currentBrands;
+        }
+
+        return currentBrands.map((brand) =>
+            (brand.owner_name || '').trim() === safeOwnerName
+                ? { ...brand, owner_name: '' }
+                : brand
+        );
+    };
+
+    const insertCategoryNode = (currentCategories, level, parentId, categoryNode) => {
+        if (level === 1) {
+            return [
+                ...currentCategories,
+                {
+                    id: categoryNode.id,
+                    name: categoryNode.name,
+                    subCategories: [],
+                },
+            ];
+        }
+
+        if (level === 2) {
+            return currentCategories.map((catL1) => {
+                if (!isSameEntityId(catL1.id, parentId)) return catL1;
+
+                return {
+                    ...catL1,
+                    subCategories: [
+                        ...(catL1.subCategories || []),
+                        {
+                            id: categoryNode.id,
+                            name: categoryNode.name,
+                            subSubCategories: [],
+                        },
+                    ],
+                };
+            });
+        }
+
+        return currentCategories.map((catL1) => ({
+            ...catL1,
+            subCategories: (catL1.subCategories || []).map((catL2) => {
+                if (!isSameEntityId(catL2.id, parentId)) return catL2;
+
+                return {
+                    ...catL2,
+                    subSubCategories: [
+                        ...(catL2.subSubCategories || []),
+                        {
+                            id: categoryNode.id,
+                            name: categoryNode.name,
+                        },
+                    ],
+                };
+            }),
+        }));
+    };
+
+    const replaceCategoryNodeId = (currentCategories, level, tempId, savedCategory) => {
+        const savedId = Number(savedCategory.id);
+        const savedName = savedCategory.name;
+
+        if (level === 1) {
+            return currentCategories.map((catL1) =>
+                isSameEntityId(catL1.id, tempId)
+                    ? { ...catL1, id: savedId, name: savedName }
+                    : catL1
+            );
+        }
+
+        if (level === 2) {
+            return currentCategories.map((catL1) => ({
+                ...catL1,
+                subCategories: (catL1.subCategories || []).map((catL2) =>
+                    isSameEntityId(catL2.id, tempId)
+                        ? { ...catL2, id: savedId, name: savedName }
+                        : catL2
+                ),
+            }));
+        }
+
+        return currentCategories.map((catL1) => ({
+            ...catL1,
+            subCategories: (catL1.subCategories || []).map((catL2) => ({
+                ...catL2,
+                subSubCategories: (catL2.subSubCategories || []).map((catL3) =>
+                    isSameEntityId(catL3.id, tempId)
+                        ? { ...catL3, id: savedId, name: savedName }
+                        : catL3
+                ),
+            })),
+        }));
+    };
+
+    const removeCategoryNode = (currentCategories, level, categoryId) => {
+        if (level === 1) {
+            return currentCategories.filter((catL1) => !isSameEntityId(catL1.id, categoryId));
+        }
+
+        if (level === 2) {
+            return currentCategories.map((catL1) => ({
+                ...catL1,
+                subCategories: (catL1.subCategories || []).filter((catL2) => !isSameEntityId(catL2.id, categoryId)),
+            }));
+        }
+
+        return currentCategories.map((catL1) => ({
+            ...catL1,
+            subCategories: (catL1.subCategories || []).map((catL2) => ({
+                ...catL2,
+                subSubCategories: (catL2.subSubCategories || []).filter((catL3) => !isSameEntityId(catL3.id, categoryId)),
+            })),
+        }));
+    };
+
     const getBrandStatusLabel = (status) => normalizeBrandStatus(status) === 1 ? 'Aktif' : 'Non-aktif';
     const isBrandActive = (status) => normalizeBrandStatus(status) === 1;
     const createEmptyBrandInput = () => ({ name: '', description: '', owner_name: '', status: 1 });
@@ -499,9 +681,70 @@ export default function Dashboard({ databaseBrands, databaseCategories }) {
         ...brand,
         owner_name: brand.owner_name || '',
         description: brand.description || '',
+        logo_url: brand.logo_url || brand.logo_public_url || '',
         status: normalizeBrandStatus(brand.status),
         brand_code: brand.brand_code || brand.code || `ID-${brand.id}`,
+        updated_at: brand.updated_at || null,
     });
+    const buildBrandLogoUrl = (logoUrl) => {
+        if (!logoUrl || typeof logoUrl !== 'string') return null;
+
+        const trimmed = logoUrl.trim();
+        if (!trimmed) return null;
+        if (['0', 'null', 'undefined', 'false'].includes(trimmed.toLowerCase())) {
+            return null;
+        }
+
+        if (trimmed.startsWith('blob:') || trimmed.startsWith('data:image/')) {
+            return trimmed;
+        }
+
+        if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+            try {
+                const parsed = new URL(trimmed);
+                if (parsed.pathname.startsWith('/storage/')) {
+                    return `${parsed.pathname}${parsed.search}`;
+                }
+
+                const storageIdx = parsed.pathname.indexOf('/storage/');
+                if (storageIdx >= 0) {
+                    return `${parsed.pathname.slice(storageIdx)}${parsed.search}`;
+                }
+            } catch {
+                return trimmed;
+            }
+
+            return trimmed;
+        }
+
+        let normalized = trimmed.replaceAll('\\', '/').replace(/^\/+/, '');
+        if (normalized.startsWith('public/')) {
+            normalized = normalized.slice('public/'.length);
+        }
+        if (normalized.startsWith('storage/')) {
+            return `/${normalized}`;
+        }
+
+        return `/storage/${normalized}`;
+    };
+    const buildBrandLogoSrc = (brand) => buildBrandLogoUrl(brand?.logo_url || brand?.logo_public_url);
+    const logoPreviewObjectUrlRef = useRef(null);
+    const releaseLogoPreviewObjectUrl = () => {
+        if (logoPreviewObjectUrlRef.current) {
+            URL.revokeObjectURL(logoPreviewObjectUrlRef.current);
+            logoPreviewObjectUrlRef.current = null;
+        }
+    };
+    const setLogoPreviewFromServer = (logoUrl) => {
+        releaseLogoPreviewObjectUrl();
+        setLogoPreview(buildBrandLogoUrl(logoUrl));
+    };
+    const setLogoPreviewFromFile = (file) => {
+        releaseLogoPreviewObjectUrl();
+        const objectUrl = URL.createObjectURL(file);
+        logoPreviewObjectUrlRef.current = objectUrl;
+        setLogoPreview(objectUrl);
+    };
 
     const [brands, setBrands] = useState((databaseBrands || []).map(normalizeBrandRecord));
     useEffect(() => {
@@ -514,6 +757,41 @@ export default function Dashboard({ databaseBrands, databaseCategories }) {
     useEffect(() => {
         setCategories(Array.isArray(databaseCategories) ? databaseCategories : INITIAL_CATEGORY_DATA);
     }, [databaseCategories]);
+
+    const [systemUsers, setSystemUsers] = useState((databaseUsers || []).map(normalizeUserRecord));
+    useEffect(() => {
+        setSystemUsers((databaseUsers || []).map(normalizeUserRecord));
+    }, [databaseUsers]);
+
+    const authUserId = authUser?.id;
+    const authUserEmail = String(authUser?.email || '').trim().toLowerCase();
+    const matchedSystemUser = systemUsers.find((user) =>
+        (authUserId != null && isSameEntityId(user.id, authUserId)) ||
+        (authUserEmail !== '' && String(user.email || '').trim().toLowerCase() === authUserEmail)
+    );
+    const sidebarUserName = (matchedSystemUser?.name || authUser?.name || 'Pengguna').trim() || 'Pengguna';
+    const sidebarUserRole = normalizeUserRole(matchedSystemUser?.role || authUser?.role);
+    const sidebarUserInitials = getUserInitials(sidebarUserName);
+    const isActiveSuperAdminUser = (user) => (
+        normalizeUserRole(user?.role) === 'Super Admin' &&
+        normalizeUserStatus(user?.status) === 1
+    );
+    const wouldLeaveNoActiveSuperAdmin = (targetUser, nextRole, nextStatus) => {
+        if (!targetUser) return false;
+
+        const currentlyActiveSuperAdmin = isActiveSuperAdminUser(targetUser);
+        const willRemainActiveSuperAdmin = (
+            normalizeUserRole(nextRole ?? targetUser.role) === 'Super Admin' &&
+            normalizeUserStatus(nextStatus ?? targetUser.status) === 1
+        );
+
+        if (!currentlyActiveSuperAdmin || willRemainActiveSuperAdmin) {
+            return false;
+        }
+
+        const activeSuperAdminCount = systemUsers.filter(isActiveSuperAdminUser).length;
+        return activeSuperAdminCount <= 1;
+    };
 
     const [products, setProducts] = useState([
         {
@@ -567,44 +845,10 @@ export default function Dashboard({ databaseBrands, databaseCategories }) {
         }
     ]);
 
-    const [tags, setTags] = useState([
-        // Batch Aktif - Luxury Rose EDP (101)
-        { code: "MKI-101-ABCD1234", productId: 101, id: 1682000000001, productName: "Luxury Rose EDP 30ml", status: "Aktif", batchId: "BATCH-820001", pin: "123456", ecc: "M" },
-        { code: "MKI-101-EFGH5678", productId: 101, id: 1682000000002, productName: "Luxury Rose EDP 30ml", status: "Aktif", batchId: "BATCH-820001", pin: "654321", ecc: "M" },
-        { code: "MKI-101-WXYZ9012", productId: 101, id: 1682000000003, productName: "Luxury Rose EDP 30ml", status: "Sudah Scan", batchId: "BATCH-820001", pin: "112233", ecc: "M" },
-
-        // Batch Aktif - Acne Fighter Night Cream (102)
-        { code: "MKI-102-IJKL9012", productId: 102, id: 1682100000001, productName: "Acne Fighter Night Cream", status: "Aktif", batchId: "BATCH-821001", pin: null, ecc: "L" },
-        { code: "MKI-102-MNOP3456", productId: 102, id: 1682100000002, productName: "Acne Fighter Night Cream", status: "Aktif", batchId: "BATCH-821001", pin: null, ecc: "L" },
-        { code: "MKI-102-QRST7890", productId: 102, id: 1682100000003, productName: "Acne Fighter Night Cream", status: "Invalid", batchId: "BATCH-821001", pin: null, ecc: "L" },
-
-        // Batch Suspended - Gentle Facial Wash (103)
-        { code: "MKI-103-SUSP0001", productId: 103, id: 1682200000001, productName: "Gentle Facial Wash 100ml", status: "Suspended", batchId: "BATCH-822002", pin: "998877", ecc: "H" },
-        { code: "MKI-103-SUSP0002", productId: 103, id: 1682200000002, productName: "Gentle Facial Wash 100ml", status: "Suspended", batchId: "BATCH-822002", pin: "778899", ecc: "H" },
-
-        // Batch Aktif - Coffee Body Scrub (105)
-        { code: "MKI-105-SCRB0001", productId: 105, id: 1682300000001, productName: "Coffee Body Scrub", status: "Aktif", batchId: "BATCH-823003", pin: null, ecc: "M" },
-        { code: "MKI-105-SCRB0002", productId: 105, id: 1682300000002, productName: "Coffee Body Scrub", status: "Aktif", batchId: "BATCH-823003", pin: null, ecc: "M" },
-    ]);
-
-    const [batches, setBatches] = useState([
-        {
-            id: "BATCH-823003", date: "10 Mar 2026, 08:00", productName: "Coffee Body Scrub", brandName: "PureNaturals", qty: 250,
-            firstCode: "MKI-105-SCRB0001", lastCode: "MKI-105-SCRB0250", status: "Generated", settings: { ecc: "M", idLength: "8 Karakter", pin: "Tidak" }
-        },
-        {
-            id: "BATCH-822002", date: "15 Jan 2026, 11:45", productName: "Gentle Facial Wash 100ml", brandName: "Glow & Co", qty: 2000,
-            firstCode: "MKI-103-SUSP0001", lastCode: "MKI-103-SUSP2000", status: "Suspended", settings: { ecc: "H", idLength: "10 Karakter", pin: "Ya (6 Digit)" }
-        },
-        {
-            id: "BATCH-821001", date: "05 Okt 2025, 14:30", productName: "Acne Fighter Night Cream", brandName: "DermaBeauty", qty: 500,
-            firstCode: "MKI-102-IJKL9012", lastCode: "MKI-102-XYZW9999", status: "Generated", settings: { ecc: "L", idLength: "8 Karakter", pin: "Tidak" }
-        },
-        {
-            id: "BATCH-820001", date: "01 Okt 2025, 09:15", productName: "Luxury Rose EDP 30ml", brandName: "Luxe Scents", qty: 1000,
-            firstCode: "MKI-101-ABCD1234", lastCode: "MKI-101-ZZZZ8888", status: "Generated", settings: { ecc: "M", idLength: "8 Karakter", pin: "Ya (6 Digit)" }
-        }
-    ]);
+    const [batches, setBatches] = useState((databaseTagBatches || []).map(normalizeBatchRecord));
+    const [isSavingBatch, setIsSavingBatch] = useState(false);
+    const [pendingBatchActionIds, setPendingBatchActionIds] = useState([]);
+    const totalGeneratedTagCount = batches.reduce((total, batch) => total + Number(batch.qty || 0), 0);
 
     // --- STATE FORM ---
     const [brandInput, setBrandInput] = useState(createEmptyBrandInput());
@@ -612,14 +856,18 @@ export default function Dashboard({ databaseBrands, databaseCategories }) {
     const [logoFile, setLogoFile] = useState(null);
     const [logoPreview, setLogoPreview] = useState(null);
     const [editingBrandId, setEditingBrandId] = useState(null);
+    const [brokenBrandLogoIds, setBrokenBrandLogoIds] = useState([]);
 
-    const [userInput, setUserInput] = useState({ name: '', email: '', role: 'Brand Owner', password: '' });
+    const [userInput, setUserInput] = useState(createEmptyUserInput());
     const [editingUserId, setEditingUserId] = useState(null);
+    const [isSavingUser, setIsSavingUser] = useState(false);
+    const [pendingUserActionIds, setPendingUserActionIds] = useState([]);
     const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
+    const [isSavingPassword, setIsSavingPassword] = useState(false);
     const [passwordData, setPasswordData] = useState({ userId: null, userName: '', newPassword: '', confirmPassword: '' });
 
     const [tagConfig, setTagConfig] = useState({
-        productId: '', quantity: 100, idLength: 8, usePin: true, pinLength: 6, errorCorrection: 'M'
+        productId: '', quantity: 100, randomLength: 5
     });
     const [isTagModalOpen, setIsTagModalOpen] = useState(false);
     const [generatedQR, setGeneratedQR] = useState(null);
@@ -635,6 +883,7 @@ export default function Dashboard({ databaseBrands, databaseCategories }) {
     const [newCatL1Name, setNewCatL1Name] = useState('');
     const [newCatL2Name, setNewCatL2Name] = useState('');
     const [newCatL3Name, setNewCatL3Name] = useState('');
+    const [isSavingCategory, setIsSavingCategory] = useState(false);
 
     // --- STATE PENGATURAN ---
     const [requireGps, setRequireGps] = useState(true);
@@ -642,9 +891,87 @@ export default function Dashboard({ databaseBrands, databaseCategories }) {
 
     // --- STATE UNTUK FILTER SCAN ---
     const [statusFilter, setStatusFilter] = useState('Semua Status');
+    const brandSubmitLockRef = useRef(false);
+    const userSubmitLockRef = useRef(false);
+    const categorySubmitLockRef = useRef(false);
+    const tagSubmitLockRef = useRef(false);
+
+    const transitionSetBrands = (updater) => {
+        startTransition(() => {
+            setBrands(updater);
+        });
+    };
+    const transitionSetUsers = (updater) => {
+        startTransition(() => {
+            setSystemUsers(updater);
+        });
+    };
+    const transitionSetCategories = (updater) => {
+        startTransition(() => {
+            setCategories(updater);
+        });
+    };
+    const markBrandLogoBroken = (brandId) => {
+        setBrokenBrandLogoIds((currentIds) => (
+            currentIds.includes(brandId) ? currentIds : [...currentIds, brandId]
+        ));
+    };
+    const clearBrokenBrandLogo = (brandId) => {
+        setBrokenBrandLogoIds((currentIds) => currentIds.filter((id) => id !== brandId));
+    };
+
+    const setUserPendingAction = (userId, isPending) => {
+        const key = normalizeComparableId(userId);
+
+        setPendingUserActionIds((currentIds) => {
+            const alreadyPending = currentIds.includes(key);
+            if (isPending) {
+                return alreadyPending ? currentIds : [...currentIds, key];
+            }
+
+            if (!alreadyPending) {
+                return currentIds;
+            }
+
+            return currentIds.filter((id) => id !== key);
+        });
+    };
+
+    const isUserPendingAction = (userId) => pendingUserActionIds.includes(normalizeComparableId(userId));
+    const setBatchPendingAction = (batchId, isPending) => {
+        const key = normalizeComparableId(batchId);
+
+        setPendingBatchActionIds((currentIds) => {
+            const alreadyPending = currentIds.includes(key);
+            if (isPending) {
+                return alreadyPending ? currentIds : [...currentIds, key];
+            }
+
+            if (!alreadyPending) {
+                return currentIds;
+            }
+
+            return currentIds.filter((id) => id !== key);
+        });
+    };
+    const isBatchPendingAction = (batchId) => pendingBatchActionIds.includes(normalizeComparableId(batchId));
+
+    useEffect(() => {
+        setBatches((databaseTagBatches || []).map(normalizeBatchRecord));
+    }, [databaseTagBatches]);
+
+    useEffect(() => {
+        return () => {
+            releaseLogoPreviewObjectUrl();
+        };
+    }, []);
 
     // --- LOGIC HANDLERS BRAND ---
+    const [isSavingBrand, setIsSavingBrand] = useState(false);
     const closeBrandModal = () => {
+        brandSubmitLockRef.current = false;
+        setIsSavingBrand(false);
+        releaseLogoPreviewObjectUrl();
         setBrandInput(createEmptyBrandInput());
         setLogoFile(null);
         setLogoPreview(null);
@@ -653,6 +980,8 @@ export default function Dashboard({ databaseBrands, databaseCategories }) {
     };
 
     const openCreateBrandModal = () => {
+        brandSubmitLockRef.current = false;
+        setIsSavingBrand(false);
         closeBrandModal();
         setIsBrandModalOpen(true);
     };
@@ -672,12 +1001,7 @@ export default function Dashboard({ databaseBrands, databaseCategories }) {
             setBrandInput((currentInput) => ({ ...currentInput, status: newStatus }));
         }
 
-        axios.post(`/brands/update/${brand.id}`, {
-            name: brand.name,
-            owner_name: brand.owner_name || '',
-            description: brand.description || '',
-            status: newStatus,
-        })
+        axios.post(`/brands/${brand.id}/status`, { status: newStatus })
             .then((response) => {
                 const savedBrand = normalizeBrandRecord(response?.data?.brand || { ...brand, status: newStatus });
 
@@ -719,6 +1043,8 @@ export default function Dashboard({ databaseBrands, databaseCategories }) {
 
     const handleSaveBrand = (e) => {
         e.preventDefault();
+        if (brandSubmitLockRef.current || isSavingBrand) return;
+
         const brandName = brandInput.name.trim();
 
         if (!brandName) {
@@ -726,42 +1052,54 @@ export default function Dashboard({ databaseBrands, databaseCategories }) {
             return;
         }
 
-        const formData = new FormData();
-        formData.append('name', brandName);
-        formData.append('owner_name', brandInput.owner_name.trim());
-        formData.append('description', brandInput.description.trim());
-        formData.append('status', String(normalizeBrandStatus(brandInput.status)));
-        if (logoFile) {
-            formData.append('logo', logoFile);
-        }
+        brandSubmitLockRef.current = true;
+        setIsSavingBrand(true);
 
         const isEditing = Boolean(editingBrandId);
-
-        if (!isEditing) {
-            const randomCode = Math.floor(1000 + Math.random() * 9000);
-            formData.append('brand_code', `CL-${randomCode}`);
-        }
-
+        const normalizedStatus = normalizeBrandStatus(brandInput.status);
+        const randomCode = Math.floor(1000 + Math.random() * 9000);
+        const createBrandCode = `CL-${randomCode}`;
+        const basePayload = {
+            name: brandName,
+            owner_name: brandInput.owner_name.trim(),
+            description: brandInput.description.trim(),
+            status: normalizedStatus,
+        };
         const targetUrl = isEditing ? `/brands/update/${editingBrandId}` : '/brands';
-
-        axios.post(targetUrl, formData, {
-            headers: {
-                'Content-Type': 'multipart/form-data',
-            },
-        })
+        const payload = logoFile
+            ? (() => {
+                const formData = new FormData();
+                formData.append('name', basePayload.name);
+                formData.append('owner_name', basePayload.owner_name);
+                formData.append('description', basePayload.description);
+                formData.append('status', String(basePayload.status));
+                formData.append('logo', logoFile);
+                formData.append('logo_upload_expected', '1');
+                if (!isEditing) {
+                    formData.append('brand_code', createBrandCode);
+                }
+                return formData;
+            })()
+            : {
+                ...basePayload,
+                ...(isEditing ? {} : { brand_code: createBrandCode }),
+            };
+        axios.post(targetUrl, payload)
             .then((response) => {
                 const savedBrand = normalizeBrandRecord(response?.data?.brand || {});
 
                 if (savedBrand.id) {
                     if (isEditing) {
-                        setBrands((currentBrands) =>
+                        transitionSetBrands((currentBrands) =>
                             currentBrands.map((currentBrand) =>
                                 currentBrand.id === savedBrand.id ? savedBrand : currentBrand
                             )
                         );
                     } else {
-                        setBrands((currentBrands) => [savedBrand, ...currentBrands]);
+                        transitionSetBrands((currentBrands) => [savedBrand, ...currentBrands]);
                     }
+
+                    clearBrokenBrandLogo(savedBrand.id);
                 }
 
                 showToast(isEditing ? "Data brand berhasil diperbarui!" : "Brand baru berhasil ditambahkan!");
@@ -769,14 +1107,24 @@ export default function Dashboard({ databaseBrands, databaseCategories }) {
             })
             .catch((error) => {
                 const errors = error?.response?.data?.errors || {};
+                if (errors?.logo?.[0]) {
+                    showToast(errors.logo[0], "error");
+                    return;
+                }
                 showToast(
                     getFirstErrorMessage(errors, isEditing ? "Gagal memperbarui data brand." : "Gagal menambahkan brand baru."),
                     "error"
                 );
+            })
+            .finally(() => {
+                brandSubmitLockRef.current = false;
+                setIsSavingBrand(false);
             });
     };
 
     const handleEditBrand = (brand) => {
+        brandSubmitLockRef.current = false;
+        setIsSavingBrand(false);
         setBrandInput({
             name: brand.name || '',
             description: brand.description === "-" ? "" : (brand.description || ''),
@@ -785,7 +1133,7 @@ export default function Dashboard({ databaseBrands, databaseCategories }) {
         });
         setEditingBrandId(brand.id);
         setLogoFile(null);
-        setLogoPreview(brand.logo_url ? `/storage/${brand.logo_url}` : null);
+        setLogoPreviewFromServer(brand.logo_url);
         setIsBrandModalOpen(true);
     };
 
@@ -818,6 +1166,7 @@ export default function Dashboard({ databaseBrands, databaseCategories }) {
     };
 
     const handleCancelEditBrand = () => {
+        if (isSavingBrand) return;
         closeBrandModal();
     };
 
@@ -918,61 +1267,310 @@ export default function Dashboard({ databaseBrands, databaseCategories }) {
     // --- LOGIC HANDLERS USER ---
     const handleSaveUser = (e) => {
         e.preventDefault();
-        if (!userInput.name || !userInput.email) return;
+        if (userSubmitLockRef.current || isSavingUser) return;
 
-        if (editingUserId) {
-            setSystemUsers(systemUsers.map(u => u.id === editingUserId ? { ...u, name: userInput.name, email: userInput.email, role: userInput.role } : u));
-            showToast("Data pengguna berhasil diperbarui!");
-        } else {
-            if (!userInput.password) {
-                showToast("Sandi wajib diisi untuk pengguna baru!", "error");
-                return;
-            }
-            const newUser = { id: Date.now(), name: userInput.name, email: userInput.email, role: userInput.role, status: "Aktif" };
-            setSystemUsers([...systemUsers, newUser]);
-            showToast("Akun pengguna baru berhasil dibuat!");
+        const trimmedName = userInput.name.trim();
+        const trimmedEmail = userInput.email.trim().toLowerCase();
+        const normalizedRole = normalizeUserRole(userInput.role);
+
+        if (!trimmedName || !trimmedEmail) {
+            showToast("Nama dan email wajib diisi.", "error");
+            return;
         }
-        setUserInput({ name: '', email: '', role: 'Brand Owner', password: '' });
+
+        const isEditing = Boolean(editingUserId);
+        const previousUser = isEditing
+            ? systemUsers.find((user) => Number(user.id) === Number(editingUserId))
+            : null;
+
+        if (!isEditing && !userInput.password) {
+            showToast("Sandi wajib diisi untuk pengguna baru!", "error");
+            return;
+        }
+
+        userSubmitLockRef.current = true;
+        setIsSavingUser(true);
+
+        const payload = {
+            name: trimmedName,
+            email: trimmedEmail,
+            role: normalizedRole,
+            status: normalizeUserStatus(userInput.status),
+        };
+
+        if (isEditing && previousUser && wouldLeaveNoActiveSuperAdmin(previousUser, payload.role, payload.status)) {
+            userSubmitLockRef.current = false;
+            setIsSavingUser(false);
+            showToast("Minimal harus ada 1 akun Super Admin aktif. Ubah akun lain menjadi Super Admin terlebih dahulu.", "error");
+            return;
+        }
+
+        const draftInputSnapshot = { ...userInput };
+        const previousUsersSnapshot = systemUsers;
+        const previousBrandsSnapshot = brands;
+        const previousEditingUserId = editingUserId;
+        const previousIsUserModalOpen = isUserModalOpen;
+        const optimisticId = isEditing
+            ? previousUser?.id
+            : generateTempNumericId();
+
+        if (optimisticId === undefined || optimisticId === null) {
+            userSubmitLockRef.current = false;
+            setIsSavingUser(false);
+            showToast("Gagal memproses data pengguna. Silakan coba lagi.", "error");
+            return;
+        }
+
+        const optimisticUser = normalizeUserRecord({
+            ...(previousUser || {}),
+            id: optimisticId,
+            ...payload,
+        });
+
+        setUserPendingAction(optimisticId, true);
+        if (isEditing) {
+            transitionSetUsers((currentUsers) =>
+                currentUsers.map((currentUser) =>
+                    isSameEntityId(currentUser.id, optimisticId) ? optimisticUser : currentUser
+                )
+            );
+
+            if (previousUser) {
+                transitionSetBrands((currentBrands) =>
+                    syncBrandsFromUserMutation(
+                        currentBrands,
+                        previousUser.name,
+                        optimisticUser.name,
+                        previousUser.role,
+                        optimisticUser.role
+                    )
+                );
+            }
+        } else {
+            transitionSetUsers((currentUsers) => [optimisticUser, ...currentUsers]);
+        }
+
+        setUserInput(createEmptyUserInput());
         setEditingUserId(null);
         setIsUserModalOpen(false);
+
+        const request = isEditing
+            ? axios.post(`/users/update/${editingUserId}`, payload)
+            : axios.post('/users', { ...payload, password: userInput.password });
+
+        request
+            .then((response) => {
+                const savedUser = normalizeUserRecord(response?.data?.user || {});
+                if (!savedUser.id) {
+                    throw new Error('USER_RESPONSE_MISSING_ID');
+                }
+
+                transitionSetUsers((currentUsers) =>
+                    currentUsers.map((currentUser) =>
+                        isSameEntityId(currentUser.id, optimisticId) ? savedUser : currentUser
+                    )
+                );
+
+                if (isEditing && previousUser) {
+                    transitionSetBrands((currentBrands) =>
+                        syncBrandsFromUserMutation(
+                            currentBrands,
+                            previousUser.name,
+                            savedUser.name,
+                            previousUser.role,
+                            savedUser.role
+                        )
+                    );
+                }
+
+                showToast(isEditing ? "Data pengguna berhasil diperbarui!" : "Akun pengguna baru berhasil dibuat!");
+            })
+            .catch((error) => {
+                transitionSetUsers(previousUsersSnapshot);
+                transitionSetBrands(previousBrandsSnapshot);
+                setUserInput(draftInputSnapshot);
+                setEditingUserId(previousEditingUserId);
+                setIsUserModalOpen(previousIsUserModalOpen);
+
+                if (error?.message === 'USER_RESPONSE_MISSING_ID') {
+                    showToast("Respons server tidak lengkap. Data pengguna dikembalikan seperti semula.", "error");
+                    return;
+                }
+
+                const errors = error?.response?.data?.errors || {};
+                showToast(
+                    getFirstErrorMessage(errors, isEditing ? "Gagal memperbarui data pengguna." : "Gagal menambahkan pengguna baru."),
+                    "error"
+                );
+            })
+            .finally(() => {
+                setUserPendingAction(optimisticId, false);
+                userSubmitLockRef.current = false;
+                setIsSavingUser(false);
+            });
     };
 
     const handleEditUser = (user) => {
-        setUserInput({ name: user.name, email: user.email, role: user.role, password: '' });
+        if (isUserPendingAction(user.id)) return;
+
+        userSubmitLockRef.current = false;
+        setIsSavingUser(false);
+        setUserInput({
+            name: user.name || '',
+            email: user.email || '',
+            role: normalizeUserRole(user.role),
+            password: '',
+            status: normalizeUserStatus(user.status),
+        });
         setEditingUserId(user.id);
         setIsUserModalOpen(true);
     };
 
     const handleCancelEditUser = () => {
-        setUserInput({ name: '', email: '', role: 'Brand Owner', password: '' });
+        if (isSavingUser) return;
+
+        userSubmitLockRef.current = false;
+        setIsSavingUser(false);
+        setUserInput(createEmptyUserInput());
         setEditingUserId(null);
         setIsUserModalOpen(false);
     };
 
     const handleDeleteUser = (id) => {
+        if (isUserPendingAction(id)) {
+            return;
+        }
+
+        const targetUser = systemUsers.find((user) => isSameEntityId(user.id, id));
+        if (!targetUser) {
+            return;
+        }
+
+        if (wouldLeaveNoActiveSuperAdmin(targetUser, 'Brand Owner', 0)) {
+            showToast("Minimal harus ada 1 akun Super Admin aktif. Akun ini tidak bisa dihapus.", "error");
+            return;
+        }
+
         setConfirmObj({
             isOpen: true,
             title: "Hapus Akun Pengguna?",
             message: "Pengguna ini tidak akan bisa lagi login ke dalam sistem. Lanjutkan?",
             onConfirm: () => {
-                setSystemUsers(systemUsers.filter(u => u.id !== id));
-                showToast("Akun pengguna berhasil dihapus!");
+                if (isUserPendingAction(id)) {
+                    return;
+                }
+
+                const previousUsersSnapshot = systemUsers;
+                const previousBrandsSnapshot = brands;
+                const previousUserInput = { ...userInput };
+                const previousEditingUserId = editingUserId;
+                const previousIsUserModalOpen = isUserModalOpen;
+
+                setUserPendingAction(id, true);
+                transitionSetUsers((currentUsers) =>
+                    currentUsers.filter((currentUser) => !isSameEntityId(currentUser.id, id))
+                );
+                transitionSetBrands((currentBrands) =>
+                    detachBrandsFromDeletedOwner(currentBrands, targetUser.name, targetUser.role)
+                );
+
+                if (isSameEntityId(editingUserId, id)) {
+                    setUserInput(createEmptyUserInput());
+                    setEditingUserId(null);
+                    setIsUserModalOpen(false);
+                }
+
+                axios.delete(`/users/${id}`)
+                    .then((response) => {
+                        const deletedId = Number(response?.data?.deleted_id || id);
+
+                        transitionSetUsers((currentUsers) =>
+                            currentUsers.filter((currentUser) => Number(currentUser.id) !== deletedId)
+                        );
+
+                        showToast("Akun pengguna berhasil dihapus!");
+                    })
+                    .catch((error) => {
+                        transitionSetUsers(previousUsersSnapshot);
+                        transitionSetBrands(previousBrandsSnapshot);
+                        setUserInput(previousUserInput);
+                        setEditingUserId(previousEditingUserId);
+                        setIsUserModalOpen(previousIsUserModalOpen);
+
+                        const errors = error?.response?.data?.errors || {};
+                        showToast(getFirstErrorMessage(errors, "Gagal menghapus akun pengguna."), "error");
+                    })
+                    .finally(() => {
+                        setUserPendingAction(id, false);
+                    });
             }
         });
     };
 
-    const handleToggleUserStatus = (id) => {
-        setSystemUsers(systemUsers.map(u => {
-            if (u.id === id) {
-                const newStatus = u.status === "Aktif" ? "Non-aktif" : "Aktif";
-                showToast(`Akses pengguna berhasil di-${newStatus.toLowerCase()}`);
-                return { ...u, status: newStatus };
-            }
-            return u;
-        }));
+    const handleToggleUserStatus = (user) => {
+        if (isUserPendingAction(user.id)) {
+            return;
+        }
+
+        const previousStatus = normalizeUserStatus(user.status);
+        const newStatus = previousStatus === 1 ? 0 : 1;
+        if (wouldLeaveNoActiveSuperAdmin(user, user.role, newStatus)) {
+            showToast("Minimal harus ada 1 akun Super Admin aktif. Akun ini tidak bisa dinonaktifkan.", "error");
+            return;
+        }
+
+        setUserPendingAction(user.id, true);
+        transitionSetUsers((currentUsers) =>
+            currentUsers.map((currentUser) =>
+                isSameEntityId(currentUser.id, user.id) ? { ...currentUser, status: newStatus } : currentUser
+            )
+        );
+
+        if (isSameEntityId(editingUserId, user.id)) {
+            setUserInput((currentInput) => ({ ...currentInput, status: newStatus }));
+        }
+
+        axios.post(`/users/${user.id}/status`, { status: newStatus })
+            .then((response) => {
+                const savedUser = normalizeUserRecord(response?.data?.user || { ...user, status: newStatus });
+
+                transitionSetUsers((currentUsers) =>
+                    currentUsers.map((currentUser) =>
+                        isSameEntityId(currentUser.id, user.id) ? savedUser : currentUser
+                    )
+                );
+
+                if (isSameEntityId(editingUserId, user.id)) {
+                    setUserInput((currentInput) => ({
+                        ...currentInput,
+                        status: normalizeUserStatus(savedUser.status),
+                    }));
+                }
+
+                showToast(`Akses pengguna berhasil di${isUserActive(savedUser.status) ? 'aktifkan' : 'nonaktifkan'}.`);
+            })
+            .catch((error) => {
+                const errors = error?.response?.data?.errors || {};
+
+                transitionSetUsers((currentUsers) =>
+                    currentUsers.map((currentUser) =>
+                        isSameEntityId(currentUser.id, user.id) ? { ...currentUser, status: previousStatus } : currentUser
+                    )
+                );
+
+                if (isSameEntityId(editingUserId, user.id)) {
+                    setUserInput((currentInput) => ({ ...currentInput, status: previousStatus }));
+                }
+
+                showToast(getFirstErrorMessage(errors, "Gagal mengubah status pengguna."), "error");
+            })
+            .finally(() => {
+                setUserPendingAction(user.id, false);
+            });
     };
 
     const handleOpenPasswordModal = (user) => {
+        setIsSavingPassword(false);
         setPasswordData({ userId: user.id, userName: user.name, newPassword: '', confirmPassword: '' });
         setIsPasswordModalOpen(true);
     };
@@ -983,58 +1581,104 @@ export default function Dashboard({ databaseBrands, databaseCategories }) {
             showToast("Sandi tidak cocok! Silakan periksa kembali.", "error");
             return;
         }
-        showToast(`Sandi untuk pengguna ${passwordData.userName} berhasil diperbarui!`);
-        setIsPasswordModalOpen(false);
+
+        if (passwordData.newPassword.length < 8) {
+            showToast("Sandi minimal 8 karakter.", "error");
+            return;
+        }
+
+        setIsSavingPassword(true);
+        axios.post(`/users/${passwordData.userId}/reset-password`, {
+            password: passwordData.newPassword,
+            password_confirmation: passwordData.confirmPassword,
+        })
+            .then(() => {
+                showToast(`Sandi untuk pengguna ${passwordData.userName} berhasil diperbarui!`);
+                setIsPasswordModalOpen(false);
+            })
+            .catch((error) => {
+                const errors = error?.response?.data?.errors || {};
+                showToast(getFirstErrorMessage(errors, "Gagal memperbarui sandi pengguna."), "error");
+            })
+            .finally(() => {
+                setIsSavingPassword(false);
+            });
     };
 
     // --- LOGIC CATEGORY & TAGS ---
     const handleGenerateTags = (e) => {
         e.preventDefault();
-        if (!tagConfig.productId) { showToast("Pilih produk terlebih dahulu!", "error"); return; }
-
-        const qty = Number(tagConfig.quantity) || 1;
-        const product = products.find(p => p.id == tagConfig.productId);
-        const newBatchTags = [];
-        const baseId = Date.now();
-        const batchId = `BATCH-${baseId.toString().slice(-6)}`;
-
-        for (let i = 0; i < qty; i++) {
-            const randomStr = Math.random().toString(36).substring(2, 2 + tagConfig.idLength).toUpperCase();
-            const finalRandom = randomStr.padEnd(tagConfig.idLength, 'X');
-            const finalCode = `MKI-${product.id}-${finalRandom}`;
-
-            let pin = null;
-            if (tagConfig.usePin) {
-                pin = Math.floor(Math.random() * Math.pow(10, tagConfig.pinLength)).toString().padStart(tagConfig.pinLength, '0');
-            }
-
-            newBatchTags.push({
-                code: finalCode, productId: tagConfig.productId, id: baseId + i,
-                productName: product.name, status: 'Aktif', batchId: batchId, pin: pin, ecc: tagConfig.errorCorrection
-            });
+        if (tagSubmitLockRef.current || isSavingBatch) return;
+        if (!tagConfig.productId) {
+            showToast("Pilih produk terlebih dahulu!", "error");
+            return;
         }
 
-        setTags([...newBatchTags, ...tags]);
+        const qty = Number(tagConfig.quantity) || 0;
+        if (qty < 1) {
+            showToast("Jumlah tag minimal 1.", "error");
+            return;
+        }
 
-        const newBatchRecord = {
-            id: batchId,
-            date: new Date().toLocaleString('id-ID', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }).replace('.', ':'),
-            productName: product.name, brandName: product.brandName, qty: qty,
-            firstCode: newBatchTags[0].code, lastCode: newBatchTags[newBatchTags.length - 1].code, status: 'Generated',
-            settings: { ecc: tagConfig.errorCorrection, idLength: `${tagConfig.idLength} Karakter`, pin: tagConfig.usePin ? `Ya (${tagConfig.pinLength} Digit)` : 'Tidak' }
-        };
+        const product = products.find((item) => String(item.id) === String(tagConfig.productId));
+        if (!product) {
+            showToast("Produk tidak ditemukan. Silakan pilih ulang produk.", "error");
+            return;
+        }
 
-        setBatches([newBatchRecord, ...batches]);
+        const relatedBrand = brands.find((brand) =>
+            Number(brand.id) === Number(product.brandId) ||
+            String(brand.name || '').trim() === String(product.brandName || '').trim()
+        );
 
-        setGeneratedQR({
-            code: newBatchTags[0].code, productName: product.name, count: qty, batchId: batchId,
-            ecc: tagConfig.errorCorrection, idLength: tagConfig.idLength, usePin: tagConfig.usePin, pinLength: tagConfig.pinLength
-        });
+        tagSubmitLockRef.current = true;
+        setIsSavingBatch(true);
 
-        setIsTagModalOpen(true);
+        axios.post('/tag-batches', {
+            product_name: product.name,
+            brand_name: product.brandName || relatedBrand?.name || '',
+            brand_code: relatedBrand?.brand_code || '',
+            quantity: qty,
+            random_length: Number(tagConfig.randomLength) || 5,
+        })
+            .then((response) => {
+                const createdBatch = normalizeBatchRecord(response?.data?.batch || {});
+                if (!createdBatch.id) {
+                    throw new Error('TAG_BATCH_RESPONSE_MISSING_ID');
+                }
+
+                setBatches((currentBatches) => [createdBatch, ...currentBatches]);
+                setGeneratedQR({
+                    code: createdBatch.firstCode,
+                    productName: createdBatch.productName,
+                    count: createdBatch.qty,
+                    batchId: createdBatch.id,
+                    randomLength: Number(tagConfig.randomLength) || 5,
+                });
+                setIsTagModalOpen(true);
+                showToast(`Batch ${createdBatch.id} berhasil dibuat!`);
+            })
+            .catch((error) => {
+                const errors = error?.response?.data?.errors || {};
+
+                if (error?.message === 'TAG_BATCH_RESPONSE_MISSING_ID') {
+                    showToast("Respons server generate batch tidak lengkap. Silakan coba lagi.", "error");
+                    return;
+                }
+
+                showToast(getFirstErrorMessage(errors, "Gagal membuat batch tag."), "error");
+            })
+            .finally(() => {
+                tagSubmitLockRef.current = false;
+                setIsSavingBatch(false);
+            });
     };
 
     const addCategory = (level) => {
+        if (categorySubmitLockRef.current || isSavingCategory) {
+            return;
+        }
+
         let name = '';
         let parentId = null;
 
@@ -1053,6 +1697,34 @@ export default function Dashboard({ databaseBrands, databaseCategories }) {
             return;
         }
 
+        const tempId = generateTempNumericId();
+        const previousCategoriesSnapshot = categories;
+        const previousSelectedCatL1 = selectedCatL1;
+        const previousSelectedCatL2 = selectedCatL2;
+
+        categorySubmitLockRef.current = true;
+        setIsSavingCategory(true);
+
+        transitionSetCategories((currentCategories) =>
+            insertCategoryNode(currentCategories, level, parentId, {
+                id: tempId,
+                name,
+            })
+        );
+
+        if (level === 1) {
+            setSelectedCatL1(tempId);
+            setSelectedCatL2(null);
+            setNewCatL1Name('');
+        }
+        if (level === 2) {
+            setSelectedCatL2(tempId);
+            setNewCatL2Name('');
+        }
+        if (level === 3) {
+            setNewCatL3Name('');
+        }
+
         axios.post('/product-categories', {
             name,
             parent_id: parentId,
@@ -1060,63 +1732,56 @@ export default function Dashboard({ databaseBrands, databaseCategories }) {
             .then((response) => {
                 const createdCategory = response?.data?.category;
                 if (!createdCategory?.id) {
-                    showToast("Kategori berhasil ditambahkan, tetapi data respons tidak lengkap.", "error");
-                    return;
+                    throw new Error('CATEGORY_RESPONSE_MISSING_ID');
                 }
 
-                const createdId = Number(createdCategory.id);
-                const createdParentId = createdCategory.parent_id === null ? null : Number(createdCategory.parent_id);
-                const createdName = createdCategory.name;
-                const createdLevel = Number(createdCategory.level || level);
-
-                setCategories((currentCategories) => {
-                    if (createdLevel === 1) {
-                        return [
-                            ...currentCategories,
-                            { id: createdId, name: createdName, subCategories: [] },
-                        ];
-                    }
-
-                    if (createdLevel === 2) {
-                        return currentCategories.map((catL1) => {
-                            if (Number(catL1.id) !== createdParentId) return catL1;
-                            return {
-                                ...catL1,
-                                subCategories: [
-                                    ...(catL1.subCategories || []),
-                                    { id: createdId, name: createdName, subSubCategories: [] },
-                                ],
-                            };
-                        });
-                    }
-
-                    return currentCategories.map((catL1) => ({
-                        ...catL1,
-                        subCategories: (catL1.subCategories || []).map((catL2) => {
-                            if (Number(catL2.id) !== createdParentId) return catL2;
-                            return {
-                                ...catL2,
-                                subSubCategories: [
-                                    ...(catL2.subSubCategories || []),
-                                    { id: createdId, name: createdName },
-                                ],
-                            };
-                        }),
-                    }));
+                transitionSetCategories((currentCategories) => {
+                    const createdLevel = Number(createdCategory.level || level);
+                    return replaceCategoryNodeId(currentCategories, createdLevel, tempId, createdCategory);
                 });
 
-                if (level === 1) setNewCatL1Name('');
-                if (level === 2) setNewCatL2Name('');
-                if (level === 3) setNewCatL3Name('');
+                const createdCategoryId = Number(createdCategory.id);
+                const createdLevel = Number(createdCategory.level || level);
+                if (createdLevel === 1) {
+                    setSelectedCatL1((currentSelected) =>
+                        isSameEntityId(currentSelected, tempId) ? createdCategoryId : currentSelected
+                    );
+                }
+                if (createdLevel === 2) {
+                    setSelectedCatL2((currentSelected) =>
+                        isSameEntityId(currentSelected, tempId) ? createdCategoryId : currentSelected
+                    );
+                }
+
                 showToast("Kategori baru berhasil ditambahkan!");
             })
             .catch((error) => {
+                transitionSetCategories(previousCategoriesSnapshot);
+                setSelectedCatL1(previousSelectedCatL1);
+                setSelectedCatL2(previousSelectedCatL2);
+                if (level === 1) setNewCatL1Name(name);
+                if (level === 2) setNewCatL2Name(name);
+                if (level === 3) setNewCatL3Name(name);
+
+                if (error?.message === 'CATEGORY_RESPONSE_MISSING_ID') {
+                    showToast("Respons server kategori tidak lengkap. Data dikembalikan seperti semula.", "error");
+                    return;
+                }
+
                 const errors = error?.response?.data?.errors || {};
                 showToast(getFirstErrorMessage(errors, "Gagal menambahkan kategori."), "error");
+            })
+            .finally(() => {
+                categorySubmitLockRef.current = false;
+                setIsSavingCategory(false);
             });
     };
 
     const deleteCategory = (level, id) => {
+        if (categorySubmitLockRef.current || isSavingCategory) {
+            return;
+        }
+
         let title = "";
         let msg = "";
         if (level === 1) { title = "Hapus Kategori Utama?"; msg = "Semua sub-kategori di dalamnya akan ikut terhapus permanen."; }
@@ -1128,43 +1793,43 @@ export default function Dashboard({ databaseBrands, databaseCategories }) {
             title: title,
             message: msg,
             onConfirm: () => {
+                const previousCategoriesSnapshot = categories;
+                const previousSelectedCatL1 = selectedCatL1;
+                const previousSelectedCatL2 = selectedCatL2;
+
+                categorySubmitLockRef.current = true;
+                setIsSavingCategory(true);
+
+                transitionSetCategories((currentCategories) =>
+                    removeCategoryNode(currentCategories, level, id)
+                );
+                if (level === 1 && isSameEntityId(selectedCatL1, id)) {
+                    setSelectedCatL1(null);
+                    setSelectedCatL2(null);
+                } else if (level === 2 && isSameEntityId(selectedCatL2, id)) {
+                    setSelectedCatL2(null);
+                }
+
                 axios.delete(`/product-categories/${id}`)
                     .then((response) => {
                         const deletedId = Number(response?.data?.deleted_id || id);
-
-                        setCategories((currentCategories) => {
-                            if (level === 1) {
-                                return currentCategories.filter((catL1) => Number(catL1.id) !== deletedId);
-                            }
-
-                            if (level === 2) {
-                                return currentCategories.map((catL1) => ({
-                                    ...catL1,
-                                    subCategories: (catL1.subCategories || []).filter((catL2) => Number(catL2.id) !== deletedId),
-                                }));
-                            }
-
-                            return currentCategories.map((catL1) => ({
-                                ...catL1,
-                                subCategories: (catL1.subCategories || []).map((catL2) => ({
-                                    ...catL2,
-                                    subSubCategories: (catL2.subSubCategories || []).filter((catL3) => Number(catL3.id) !== deletedId),
-                                })),
-                            }));
-                        });
-
-                        if (level === 1 && Number(selectedCatL1) === deletedId) {
-                            setSelectedCatL1(null);
-                            setSelectedCatL2(null);
-                        } else if (level === 2 && Number(selectedCatL2) === deletedId) {
-                            setSelectedCatL2(null);
-                        }
+                        transitionSetCategories((currentCategories) =>
+                            removeCategoryNode(currentCategories, level, deletedId)
+                        );
 
                         showToast("Kategori berhasil dihapus!");
                     })
                     .catch((error) => {
+                        transitionSetCategories(previousCategoriesSnapshot);
+                        setSelectedCatL1(previousSelectedCatL1);
+                        setSelectedCatL2(previousSelectedCatL2);
+
                         const errors = error?.response?.data?.errors || {};
                         showToast(getFirstErrorMessage(errors, "Gagal menghapus kategori."), "error");
+                    })
+                    .finally(() => {
+                        categorySubmitLockRef.current = false;
+                        setIsSavingCategory(false);
                     });
             }
         });
@@ -1179,7 +1844,7 @@ export default function Dashboard({ databaseBrands, databaseCategories }) {
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
                     <StatCard title="Total Brand" value={brands.length} icon={Building2} color="bg-[#C1986E]" />
                     <StatCard title="Total SKU Produk" value={products.length} icon={Package} color="bg-emerald-500" />
-                    <StatCard title="Tag QR Aktif" value={tags.length} icon={Tag} color="bg-purple-500" />
+                    <StatCard title="Tag QR Aktif" value={new Intl.NumberFormat('id-ID').format(totalGeneratedTagCount)} icon={Tag} color="bg-purple-500" />
                     <StatCard title="Scan Validasi" value="1.248" icon={ScanLine} color="bg-blue-500" />
                 </div>
 
@@ -1256,12 +1921,25 @@ export default function Dashboard({ databaseBrands, databaseCategories }) {
     };
 
     const BrandManager = () => {
-        const filteredBrands = brands.filter(b =>
-            b.name.toLowerCase().includes(globalSearch.toLowerCase()) ||
-            (b.brand_code && b.brand_code.toLowerCase().includes(globalSearch.toLowerCase())) ||
-            (b.owner_name && b.owner_name.toLowerCase().includes(globalSearch.toLowerCase())) ||
-            (b.description && b.description.toLowerCase().includes(globalSearch.toLowerCase()))
-        ).sort((a, b) => {
+        const searchQuery = globalSearch.toLowerCase().trim();
+        const productCountByBrandId = {};
+
+        for (const product of products) {
+            const brandId = Number(product.brandId);
+            if (!Number.isFinite(brandId)) continue;
+            productCountByBrandId[brandId] = (productCountByBrandId[brandId] || 0) + 1;
+        }
+
+        const filteredBrands = brands.filter((brand) => {
+            if (!searchQuery) return true;
+
+            return (
+                brand.name.toLowerCase().includes(searchQuery) ||
+                (brand.brand_code && brand.brand_code.toLowerCase().includes(searchQuery)) ||
+                (brand.owner_name && brand.owner_name.toLowerCase().includes(searchQuery)) ||
+                (brand.description && brand.description.toLowerCase().includes(searchQuery))
+            );
+        }).sort((a, b) => {
             const dir = brandSort.direction === 'asc' ? 1 : -1;
             if (brandSort.key === 'name') return a.name.localeCompare(b.name) * dir;
             if (brandSort.key === 'status') {
@@ -1269,8 +1947,8 @@ export default function Dashboard({ databaseBrands, databaseCategories }) {
                 return (normalizeBrandStatus(a.status) === 1 ? -1 : 1) * dir;
             }
             if (brandSort.key === 'sku') {
-                const countA = products.filter(p => Number(p.brandId) === a.id).length;
-                const countB = products.filter(p => Number(p.brandId) === b.id).length;
+                const countA = productCountByBrandId[Number(a.id)] || 0;
+                const countB = productCountByBrandId[Number(b.id)] || 0;
                 return (countA - countB) * dir;
             }
             if (brandSort.key === 'owner') {
@@ -1321,19 +1999,23 @@ export default function Dashboard({ databaseBrands, databaseCategories }) {
                                 <tr><td colSpan="5" className="text-center py-8 text-slate-400 text-sm">Tidak ada brand yang sesuai dengan pencarian.</td></tr>
                             ) : (
                                 filteredBrands.map((brand) => {
-                                    const productCount = products.filter(p => Number(p.brandId) === brand.id).length;
+                                    const productCount = productCountByBrandId[Number(brand.id)] || 0;
                                     const ownerName = brand.owner_name || '';
+                                    const logoSrc = buildBrandLogoSrc(brand);
+                                    const hasBrokenLogo = brokenBrandLogoIds.includes(brand.id);
 
                                     return (
                                         <tr key={brand.id} className={`transition-colors ${isBrandActive(brand.status) ? 'hover:bg-slate-50' : 'bg-slate-50/50 grayscale-[20%]'}`}>
                                             <td className="px-6 py-4">
                                                 <div className="flex items-center gap-3">
                                                     <div className="h-10 w-10 bg-slate-100 rounded-full flex items-center justify-center text-slate-400 overflow-hidden border border-slate-200">
-                                                        {brand.logo_url ? (
+                                                        {logoSrc && !hasBrokenLogo ? (
                                                             <img
-                                                                src={`/storage/${brand.logo_url}`}
+                                                                src={logoSrc}
                                                                 alt="Logo"
                                                                 className="w-full h-full object-cover"
+                                                                loading="lazy"
+                                                                onError={() => markBrandLogoBroken(brand.id)}
                                                             />
                                                         ) : (
                                                             <ImageIcon size={18} />
@@ -1411,7 +2093,7 @@ export default function Dashboard({ databaseBrands, databaseCategories }) {
                 {isBrandModalOpen && (
                     <div
                         className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
-                        onClick={handleCancelEditBrand} // Fungsi tutup saat klik background
+                        onClick={() => { if (!isSavingBrand) handleCancelEditBrand(); }} // Fungsi tutup saat klik background
                     >
                         <div
                             className="bg-white rounded-2xl shadow-xl w-full max-w-2xl overflow-hidden animate-in zoom-in-95 duration-200 flex flex-col max-h-[90vh]"
@@ -1422,7 +2104,7 @@ export default function Dashboard({ databaseBrands, databaseCategories }) {
                                     {editingBrandId ? <Edit size={18} className="text-[#C1986E]" /> : <Building2 size={18} className="text-[#C1986E]" />}
                                     {editingBrandId ? "Edit Data Brand" : "Registrasi Brand Baru"}
                                 </h3>
-                                <button onClick={handleCancelEditBrand} className="text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-all p-1.5 rounded-lg active:scale-95"><X size={18} /></button>
+                                <button disabled={isSavingBrand} onClick={handleCancelEditBrand} className="text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-all p-1.5 rounded-lg active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"><X size={18} /></button>
                             </div>
 
                             <form onSubmit={handleSaveBrand} className="flex flex-col overflow-hidden">
@@ -1440,7 +2122,7 @@ export default function Dashboard({ databaseBrands, databaseCategories }) {
                                                     const file = e.target.files[0];
                                                     if (file) {
                                                         setLogoFile(file);
-                                                        setLogoPreview(URL.createObjectURL(file));
+                                                        setLogoPreviewFromFile(file);
                                                     }
                                                 }}
                                             />
@@ -1479,9 +2161,11 @@ export default function Dashboard({ databaseBrands, databaseCategories }) {
                                                     onChange={(e) => setBrandInput({ ...brandInput, owner_name: e.target.value })}
                                                 >
                                                     <option value="">-- Pilih Pemilik (Opsional) --</option>
-                                                    {systemUsers.filter(u => u.role === "Brand Owner").map(user => (
-                                                        <option key={user.id} value={user.name}>{user.name} ({user.email})</option>
-                                                    ))}
+                                                    {systemUsers
+                                                        .filter((user) => normalizeUserRole(user.role) === "Brand Owner" && isUserActive(user.status))
+                                                        .map((user) => (
+                                                        <option key={user.id} value={user.name}>{user.name}</option>
+                                                        ))}
                                                 </select>
                                                 <p className="text-[10px] text-slate-400">Pilih pengguna yang akan memiliki akses ke data analitik brand ini.</p>
                                             </div>
@@ -1500,8 +2184,8 @@ export default function Dashboard({ databaseBrands, databaseCategories }) {
                                     </div>
                                 </div>
                                 <div className="bg-slate-50 border-t border-slate-100 p-4 px-6 flex justify-end gap-3">
-                                    <button type="button" onClick={handleCancelEditBrand} className="px-6 py-2.5 rounded-lg font-medium text-slate-600 bg-white border border-slate-200 hover:bg-slate-50 transition-all active:scale-95 text-sm">Batal</button>
-                                    <button type="submit" className="px-6 py-2.5 rounded-lg font-medium text-white bg-[#C1986E] hover:bg-[#A37E58] transition-all shadow-sm active:scale-95 text-sm">{editingBrandId ? "Simpan Perubahan" : "Simpan Brand"}</button>
+                                    <button type="button" disabled={isSavingBrand} onClick={handleCancelEditBrand} className="px-6 py-2.5 rounded-lg font-medium text-slate-600 bg-white border border-slate-200 hover:bg-slate-50 transition-all active:scale-95 text-sm disabled:opacity-40 disabled:cursor-not-allowed">Batal</button>
+                                    <button type="submit" disabled={isSavingBrand} className="px-6 py-2.5 rounded-lg font-medium text-white bg-[#C1986E] hover:bg-[#A37E58] transition-all shadow-sm active:scale-95 text-sm disabled:opacity-60 disabled:cursor-not-allowed">{isSavingBrand ? "Menyimpan..." : (editingBrandId ? "Simpan Perubahan" : "Simpan Brand")}</button>
                                 </div>
                             </form>
                         </div>
@@ -1512,6 +2196,13 @@ export default function Dashboard({ databaseBrands, databaseCategories }) {
     };
 
     const CategoryManager = () => {
+        const selectedLevel1Category = categories.find((category) =>
+            isSameEntityId(category.id, selectedCatL1)
+        );
+        const selectedLevel2Category = selectedLevel1Category?.subCategories?.find((subCategory) =>
+            isSameEntityId(subCategory.id, selectedCatL2)
+        );
+
         return (
             <div className="space-y-6 animate-in fade-in duration-500">
                 <PageAlert text="Anda dapat menambah, menghapus, atau mengubah struktur kategori produk. Perubahan di sini akan mempengaruhi formulir input produk secara real-time." />
@@ -1527,16 +2218,18 @@ export default function Dashboard({ databaseBrands, databaseCategories }) {
                                 <input
                                     type="text"
                                     placeholder="Tambah Baru..."
-                                    className="flex-1 text-sm border rounded px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-[#C1986E] focus:border-[#C1986E]"
+                                    className="flex-1 text-sm border rounded px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-[#C1986E] focus:border-[#C1986E] disabled:bg-slate-50 disabled:cursor-not-allowed"
                                     value={newCatL1Name}
                                     onChange={(e) => setNewCatL1Name(e.target.value)}
                                     onKeyDown={(e) => {
                                         if (e.key === 'Enter') addCategory(1);
                                     }}
+                                    disabled={isSavingCategory}
                                 />
                                 <button
                                     onClick={() => addCategory(1)}
-                                    className="bg-[#C1986E] text-white p-1.5 rounded-lg hover:bg-[#A37E58] transition-all active:scale-95"
+                                    className="bg-[#C1986E] text-white p-1.5 rounded-lg hover:bg-[#A37E58] transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    disabled={isSavingCategory}
                                 >
                                     <Plus size={18} />
                                 </button>
@@ -1588,19 +2281,19 @@ export default function Dashboard({ databaseBrands, databaseCategories }) {
                                     onKeyDown={(e) => {
                                         if (e.key === 'Enter' && selectedCatL1) addCategory(2);
                                     }}
-                                    disabled={!selectedCatL1}
+                                    disabled={!selectedCatL1 || isSavingCategory}
                                 />
                                 <button
                                     onClick={() => addCategory(2)}
                                     className="bg-[#C1986E] text-white p-1.5 rounded-lg hover:bg-[#A37E58] transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
-                                    disabled={!selectedCatL1}
+                                    disabled={!selectedCatL1 || isSavingCategory}
                                 >
                                     <Plus size={18} />
                                 </button>
                             </div>
                         </div>
                         <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
-                            {selectedCatL1 && categories.find(c => c.id === selectedCatL1)?.subCategories.map(c2 => (
+                            {selectedCatL1 && selectedLevel1Category?.subCategories.map(c2 => (
                                 <div
                                     key={c2.id}
                                     onClick={() => {
@@ -1640,12 +2333,12 @@ export default function Dashboard({ databaseBrands, databaseCategories }) {
                                     onKeyDown={(e) => {
                                         if (e.key === 'Enter' && selectedCatL1 && selectedCatL2) addCategory(3);
                                     }}
-                                    disabled={!selectedCatL2}
+                                    disabled={!selectedCatL2 || isSavingCategory}
                                 />
                                 <button
                                     onClick={() => addCategory(3)}
                                     className="bg-[#C1986E] text-white p-1.5 rounded-lg hover:bg-[#A37E58] transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
-                                    disabled={!selectedCatL2}
+                                    disabled={!selectedCatL2 || isSavingCategory}
                                 >
                                     <Plus size={18} />
                                 </button>
@@ -1653,7 +2346,7 @@ export default function Dashboard({ databaseBrands, databaseCategories }) {
                         </div>
                         <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
                             {selectedCatL1 && selectedCatL2 &&
-                                categories.find(c => c.id === selectedCatL1)?.subCategories.find(s => s.id === selectedCatL2)?.subSubCategories.map(c3 => (
+                                selectedLevel2Category?.subSubCategories.map(c3 => (
                                     <div
                                         key={c3.id}
                                         className="flex justify-between items-center p-3 rounded-lg text-sm bg-white border border-slate-100 text-slate-700 hover:border-[#C1986E]/30 transition-colors"
@@ -2299,21 +2992,42 @@ export default function Dashboard({ databaseBrands, databaseCategories }) {
 
     const TagGenerator = () => {
         const handleDeleteBatch = (batchId) => {
+            if (isBatchPendingAction(batchId)) return;
+
             setConfirmObj({
                 isOpen: true,
                 title: "Hapus Batch Tag?",
                 message: `Semua tag ID yang tergabung di dalam batch ${batchId} akan ikut terhapus dan tidak lagi valid. Lanjutkan?`,
                 onConfirm: () => {
-                    setBatches(batches.filter(b => b.id !== batchId));
-                    setTags(tags.filter(t => t.batchId !== batchId));
-                    showToast(`Data batch ${batchId} berhasil dihapus!`);
+                    if (isBatchPendingAction(batchId)) return;
+
+                    const previousBatchesSnapshot = batches;
+                    setBatchPendingAction(batchId, true);
+                    setBatches((currentBatches) =>
+                        currentBatches.filter((batch) => !isSameEntityId(batch.id, batchId))
+                    );
+
+                    axios.delete(`/tag-batches/${batchId}`)
+                        .then(() => {
+                            showToast(`Data batch ${batchId} berhasil dihapus!`);
+                        })
+                        .catch((error) => {
+                            setBatches(previousBatchesSnapshot);
+                            const errors = error?.response?.data?.errors || {};
+                            showToast(getFirstErrorMessage(errors, "Gagal menghapus batch tag."), "error");
+                        })
+                        .finally(() => {
+                            setBatchPendingAction(batchId, false);
+                        });
                 }
             });
         };
 
-        // FUNGSI BARU: Suspend / Aktifkan kembali Batch
         const handleToggleBatchStatus = (batchId, currentStatus) => {
+            if (isBatchPendingAction(batchId)) return;
+
             const isSuspending = currentStatus === 'Generated';
+            const nextStatus = isSuspending ? 'Suspended' : 'Generated';
             setConfirmObj({
                 isOpen: true,
                 title: isSuspending ? "Suspend / Recall Batch?" : "Aktifkan Kembali Batch?",
@@ -2321,69 +3035,152 @@ export default function Dashboard({ databaseBrands, databaseCategories }) {
                     ? `PERINGATAN: Menonaktifkan batch ${batchId} akan membuat SEMUA tag di dalamnya berstatus INVALID/RECALL saat di-scan oleh pelanggan. Lanjutkan?`
                     : `Batch ${batchId} akan diaktifkan kembali dan tag di dalamnya akan kembali berstatus valid saat di-scan. Lanjutkan?`,
                 onConfirm: () => {
-                    setBatches(batches.map(b =>
-                        b.id === batchId ? { ...b, status: isSuspending ? 'Suspended' : 'Generated' } : b
-                    ));
-                    showToast(`Status batch ${batchId} berhasil diubah!`);
+                    if (isBatchPendingAction(batchId)) return;
+
+                    const previousBatchesSnapshot = batches;
+                    setBatchPendingAction(batchId, true);
+                    setBatches((currentBatches) =>
+                        currentBatches.map((batch) =>
+                            isSameEntityId(batch.id, batchId) ? { ...batch, status: nextStatus } : batch
+                        )
+                    );
+
+                    axios.post(`/tag-batches/${batchId}/status`, { status: nextStatus })
+                        .then((response) => {
+                            const savedBatch = normalizeBatchRecord(response?.data?.batch || {});
+                            setBatches((currentBatches) =>
+                                currentBatches.map((batch) =>
+                                    isSameEntityId(batch.id, batchId) ? savedBatch : batch
+                                )
+                            );
+                            showToast(`Status batch ${batchId} berhasil diubah!`);
+                        })
+                        .catch((error) => {
+                            setBatches(previousBatchesSnapshot);
+                            const errors = error?.response?.data?.errors || {};
+                            showToast(getFirstErrorMessage(errors, "Gagal mengubah status batch."), "error");
+                        })
+                        .finally(() => {
+                            setBatchPendingAction(batchId, false);
+                        });
                 }
             });
         };
 
-        const handlePrintBatch = (batchId) => {
-            const batchTags = tags.filter(t => t.batchId === batchId);
-            if (batchTags.length === 0) {
-                showToast("Data tag untuk batch ini tidak ditemukan.", "error");
-                return;
+        const handleDownloadBatchPdf = async (batchId) => {
+            if (isBatchPendingAction(batchId)) return;
+            setBatchPendingAction(batchId, true);
+
+            try {
+                const response = await axios.get(`/tag-batches/${batchId}/codes`);
+                const batchTags = Array.isArray(response?.data?.codes) ? response.data.codes : [];
+                if (batchTags.length === 0) {
+                    showToast("Data tag untuk batch ini tidak ditemukan.", "error");
+                    return;
+                }
+
+                const buildBatchPdfBlob = async (withKodeMonoFont) => {
+                    const pdf = new jsPDF({
+                        orientation: 'portrait',
+                        unit: 'mm',
+                        format: [310, 470], // 31 x 47 cm
+                    });
+
+                    let selectedFont = 'courier';
+                    if (withKodeMonoFont) {
+                        try {
+                            const cssResponse = await fetch('https://fonts.googleapis.com/css2?family=Kode+Mono:wght@400&display=swap');
+                            const cssText = await cssResponse.text();
+                            const urlMatch = cssText.match(/url\((https:[^)]+)\)/i);
+                            const fontUrl = urlMatch?.[1];
+
+                            if (fontUrl) {
+                                const fontResponse = await fetch(fontUrl);
+                                const fontBuffer = await fontResponse.arrayBuffer();
+                                const bytes = new Uint8Array(fontBuffer);
+                                const chunkSize = 0x8000;
+                                let binary = '';
+
+                                for (let i = 0; i < bytes.length; i += chunkSize) {
+                                    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+                                }
+
+                                const base64 = btoa(binary);
+                                pdf.addFileToVFS('KodeMono-Regular.ttf', base64);
+                                pdf.addFont('KodeMono-Regular.ttf', 'KodeMono', 'normal');
+                                selectedFont = 'KodeMono';
+                            }
+                        } catch {
+                            selectedFont = 'courier';
+                        }
+                    }
+
+                    const pageWidth = 310;
+                    const pageHeight = 470;
+                    const margin = 10;
+                    const gap = 2; // gap 2 mm
+                    const boxWidth = 22; // 2.2 cm
+                    const boxHeight = 8; // 0.8 cm
+                    const contentWidth = pageWidth - (margin * 2);
+                    const contentHeight = pageHeight - (margin * 2);
+                    const columns = Math.max(1, Math.floor((contentWidth + gap) / (boxWidth + gap)));
+                    const rows = Math.max(1, Math.floor((contentHeight + gap) / (boxHeight + gap)));
+                    const perPage = columns * rows;
+
+                    pdf.setFont(selectedFont, 'normal');
+                    pdf.setFontSize(12);
+                    pdf.setDrawColor(30, 41, 59);
+                    pdf.setTextColor(15, 23, 42);
+                    pdf.setLineWidth(0.25);
+
+                    batchTags.forEach((tag, index) => {
+                        if (index > 0 && index % perPage === 0) {
+                            pdf.addPage([310, 470], 'portrait');
+                        }
+
+                        const localIndex = index % perPage;
+                        const row = Math.floor(localIndex / columns);
+                        const column = localIndex % columns;
+                        const x = margin + (column * (boxWidth + gap));
+                        const y = margin + (row * (boxHeight + gap));
+                        const codeText = String(tag?.code || '').trim();
+
+                        pdf.rect(x, y, boxWidth, boxHeight, 'S'); // border solid
+                        pdf.text(codeText, x + (boxWidth / 2), y + (boxHeight / 2) + 1.2, {
+                            align: 'center',
+                        });
+                    });
+
+                    return pdf.output('blob');
+                };
+
+                let blob;
+                try {
+                    blob = await buildBatchPdfBlob(true);
+                } catch {
+                    blob = await buildBatchPdfBlob(false);
+                }
+
+                const filename = `${batchId}.pdf`;
+                const blobUrl = URL.createObjectURL(blob);
+
+                const link = document.createElement('a');
+                link.href = blobUrl;
+                link.download = filename;
+                document.body.appendChild(link);
+                link.click();
+                link.remove();
+
+                window.open(blobUrl, '_blank', 'noopener,noreferrer');
+                setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+                showToast(`File PDF ${filename} berhasil dibuat.`);
+            } catch (error) {
+                console.error('PDF batch generation failed:', error);
+                const errors = error?.response?.data?.errors || {};
+                showToast(getFirstErrorMessage(errors, "Gagal membuat PDF batch."), "error");
+            } finally {
+                setBatchPendingAction(batchId, false);
             }
-            const printWindow = window.open('', '_blank');
-            const htmlContent = `
-        <!DOCTYPE html>
-        <html>
-          <head>
-            <title>Print Layout - ${batchId}</title>
-            <style>
-              @page { size: 300mm 450mm; margin: 10mm; }
-              body { margin: 0; padding: 0; font-family: sans-serif; background: white; -webkit-print-color-adjust: exact; color-adjust: exact; }
-              #print-root { width: 100%; }
-              .print-container { display: flex; flex-wrap: wrap; gap: 4mm; width: 100%; align-content: flex-start; }
-              .tag-item { width: 30mm; height: 30mm; border: 1px dashed #e2e8f0; display: flex; flex-direction: column; align-items: center; justify-content: center; box-sizing: border-box; padding: 2mm; page-break-inside: avoid; }
-              .qr-mockup { width: 20mm; height: 20mm; margin-bottom: 1mm; display: flex; justify-content: center; align-items: center; }
-              .qr-mockup svg { width: 100%; height: 100%; }
-              .tag-code { font-size: 5px; font-family: monospace; text-align: center; word-break: break-all; font-weight: bold; letter-spacing: 0.5px; }
-            </style>
-            <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-            <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-            <script crossorigin src="https://unpkg.com/qrcode.react@3.1.0/lib/index.js"></script>
-          </head>
-          <body>
-            <div id="print-root"></div>
-            <script>
-              window.onload = () => {
-                const rootElement = document.getElementById('print-root');
-                const root = ReactDOM.createRoot(rootElement);
-                const tagsData = window.__BATCH_TAGS__ || [];
-                const QRCodeComponent = window.QRCodeSVG || window.QRCode?.QRCodeSVG || window.QRCode;
-                root.render(
-                  React.createElement('div', { className: 'print-container' },
-                    tagsData.map(tag => 
-                      React.createElement('div', { className: 'tag-item', key: tag.code },
-                        React.createElement('div', { className: 'qr-mockup' },
-                           React.createElement(QRCodeComponent, { value: "https://mki-auth.com/verify/" + tag.code, level: tag.ecc || "M", renderAs: "svg", width: "100%", height: "100%" })
-                        ),
-                        React.createElement('div', { className: 'tag-code' }, tag.code)
-                      )
-                    )
-                  )
-                );
-                setTimeout(() => { window.print(); }, 500);
-              };
-            </script>
-          </body>
-        </html>
-      `;
-            const dataInjection = `<script>window.__BATCH_TAGS__ = ${JSON.stringify(batchTags)};</script>`;
-            printWindow.document.write(htmlContent.replace('</head>', `${dataInjection}</head>`));
-            printWindow.document.close();
         };
 
         const filteredBatches = batches.filter(b =>
@@ -2404,7 +3201,7 @@ export default function Dashboard({ databaseBrands, databaseCategories }) {
 
         return (
             <div className="space-y-6 animate-in fade-in duration-500">
-                <PageAlert text="Gunakan fitur ini untuk membuat batch Tag QR secara massal. Konfigurasi PIN dan Error Correction dapat disesuaikan secara spesifik per batch." />
+                <PageAlert text="Gunakan fitur ini untuk membuat batch Tag QR secara massal berbasis database. Saat ini mode yang aktif adalah kode verifikasi tanpa PIN." />
                 <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
                     <h3 className="font-semibold text-slate-800 mb-6 flex items-center gap-2">
                         <QrCode size={18} className="text-[#C1986E]" /> Konfigurasi Batch Baru
@@ -2437,54 +3234,23 @@ export default function Dashboard({ databaseBrands, databaseCategories }) {
                         </div>
                         <div className="space-y-4 bg-slate-50 p-5 rounded-xl border border-slate-100">
                             <h4 className="text-sm font-semibold text-slate-700 mb-2 border-b border-slate-200 pb-3">Pengaturan Tag & Keamanan</h4>
-                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5 items-end">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-5 items-end">
                                 <div className="space-y-1.5">
-                                    <label className="text-xs font-semibold text-slate-500 uppercase">Panjang ID Acak</label>
+                                    <label className="text-xs font-semibold text-slate-500 uppercase">Panjang PIN Acak</label>
                                     <select
                                         className="w-full border border-slate-200 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-[#C1986E] bg-white text-sm h-[42px]"
-                                        value={tagConfig.idLength}
-                                        onChange={(e) => setTagConfig({ ...tagConfig, idLength: Number(e.target.value) })}
+                                        value={tagConfig.randomLength}
+                                        onChange={(e) => setTagConfig({ ...tagConfig, randomLength: Number(e.target.value) })}
                                     >
-                                        <option value={8}>8 Karakter (Standar)</option>
-                                        <option value={10}>10 Karakter</option>
-                                        <option value={12}>12 Karakter</option>
-                                    </select>
-                                </div>
-                                <div className="flex items-center justify-between bg-white px-4 py-2.5 rounded-lg border border-slate-200 h-[42px]">
-                                    <label className="text-sm font-medium text-slate-600">Gunakan PIN</label>
-                                    <ToggleSwitch
-                                        checked={tagConfig.usePin}
-                                        onChange={() => setTagConfig({ ...tagConfig, usePin: !tagConfig.usePin })}
-                                    />
-                                </div>
-                                {tagConfig.usePin && (
-                                    <div className="space-y-1.5 animate-in fade-in slide-in-from-left-2 duration-300">
-                                        <label className="text-xs font-semibold text-slate-500 uppercase">Panjang PIN (Digit)</label>
-                                        <select
-                                            className="w-full border border-slate-200 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-[#C1986E] bg-white text-sm h-[42px]"
-                                            value={tagConfig.pinLength}
-                                            onChange={(e) => setTagConfig({ ...tagConfig, pinLength: Number(e.target.value) })}
-                                        >
-                                            <option value={4}>4 Digit</option>
-                                            <option value={6}>6 Digit</option>
-                                        </select>
-                                    </div>
-                                )}
-                                <div className="space-y-1.5">
-                                    <label className="text-xs font-semibold text-slate-500 uppercase">QR Error Correction</label>
-                                    <select
-                                        className="w-full border border-slate-200 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-[#C1986E] bg-white text-sm h-[42px]"
-                                        value={tagConfig.errorCorrection}
-                                        onChange={(e) => setTagConfig({ ...tagConfig, errorCorrection: e.target.value })}
-                                    >
-                                        <option value="M">Level M (15% recovery)</option>
-                                        <option value="H">Level H (30% recovery)</option>
+                                        <option value={5}>5 Karakter</option>
+                                        <option value={6}>6 Karakter</option>
+                                        <option value={7}>7 Karakter</option>
                                     </select>
                                 </div>
                             </div>
                         </div>
                         <div className="flex justify-end pt-4 border-t border-slate-100">
-                            <button type="submit" className="bg-[#C1986E] hover:bg-[#A37E58] text-white px-8 py-2.5 rounded-lg font-medium transition-all active:scale-95 flex items-center gap-2">
+                            <button type="submit" disabled={isSavingBatch} className="bg-[#C1986E] hover:bg-[#A37E58] text-white px-8 py-2.5 rounded-lg font-medium transition-all active:scale-95 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
                                 <Hash size={18} /> Generate Batch Sekarang
                             </button>
                         </div>
@@ -2517,7 +3283,7 @@ export default function Dashboard({ databaseBrands, databaseCategories }) {
                                     <div className="flex items-center gap-2">Produk SKU <SortIcon columnKey="product" sortConfig={batchSort} /></div>
                                 </th>
                                 <th className="px-6 py-4 font-semibold text-slate-600 text-sm cursor-pointer hover:bg-slate-100 transition-colors group select-none" onClick={() => handleSortChange('qty', batchSort, setBatchSort)}>
-                                    <div className="flex items-center gap-2">Jumlah & Keamanan <SortIcon columnKey="qty" sortConfig={batchSort} /></div>
+                                    <div className="flex items-center gap-2">Jumlah & Kode <SortIcon columnKey="qty" sortConfig={batchSort} /></div>
                                 </th>
                                 <th className="px-6 py-4 font-semibold text-slate-600 text-sm cursor-pointer hover:bg-slate-100 transition-colors group select-none" onClick={() => handleSortChange('status', batchSort, setBatchSort)}>
                                     <div className="flex items-center gap-2">Status <SortIcon columnKey="status" sortConfig={batchSort} /></div>
@@ -2529,8 +3295,10 @@ export default function Dashboard({ databaseBrands, databaseCategories }) {
                             {filteredBatches.length === 0 ? (
                                 <tr><td colSpan="5" className="text-center py-8 text-slate-400 text-sm">Tidak ada riwayat batch yang ditemukan.</td></tr>
                             ) : (
-                                filteredBatches.map(batch => (
-                                    <tr key={batch.id} className={`transition-colors ${batch.status === 'Suspended' ? 'bg-red-50/30' : 'hover:bg-slate-50'}`}>
+                                filteredBatches.map(batch => {
+                                    const isPending = isBatchPendingAction(batch.id);
+                                    return (
+                                    <tr key={batch.id} className={`transition-colors ${batch.status === 'Suspended' ? 'bg-red-50/30' : 'hover:bg-slate-50'} ${isPending ? 'opacity-60' : ''}`}>
                                         <td className="px-6 py-4">
                                             <div className="flex items-center gap-2 mb-1">
                                                 <p className="font-mono text-sm font-semibold text-slate-800 bg-slate-100 px-2 py-0.5 rounded inline-block">{batch.id}</p>
@@ -2544,8 +3312,7 @@ export default function Dashboard({ databaseBrands, databaseCategories }) {
                                         <td className="px-6 py-4">
                                             <p className="text-sm font-semibold text-slate-700">{batch.qty} <span className="text-xs font-normal text-slate-500">Tag</span></p>
                                             <div className="flex items-center gap-2 mt-1">
-                                                <span className="text-[10px] bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded font-medium border border-blue-100">PIN: {batch.settings.pin}</span>
-                                                <span className="text-[10px] bg-purple-50 text-purple-600 px-1.5 py-0.5 rounded font-medium border border-purple-100">ECC: {batch.settings.ecc}</span>
+                                                <span className="text-[10px] bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded font-medium border border-blue-100">Panjang PIN Acak: {batch.settings.randomLength}</span>
                                             </div>
                                         </td>
                                         <td className="px-6 py-4">
@@ -2563,26 +3330,27 @@ export default function Dashboard({ databaseBrands, databaseCategories }) {
                                             <div className="flex items-center justify-center gap-2">
                                                 <Tooltip text={batch.status === 'Generated' ? "Suspend / Recall Batch" : "Aktifkan Kembali Batch"} position="top">
                                                     <button
+                                                        disabled={isPending}
                                                         onClick={() => handleToggleBatchStatus(batch.id, batch.status)}
-                                                        className={`p-1.5 rounded-lg transition-all active:scale-95 ${batch.status === 'Generated' ? 'text-slate-400 hover:text-orange-600 hover:bg-orange-50' : 'text-red-500 hover:text-emerald-600 hover:bg-emerald-50'}`}
+                                                        className={`p-1.5 rounded-lg transition-all active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed ${batch.status === 'Generated' ? 'text-slate-400 hover:text-orange-600 hover:bg-orange-50' : 'text-red-500 hover:text-emerald-600 hover:bg-emerald-50'}`}
                                                     >
                                                         <AlertCircle size={16} />
                                                     </button>
                                                 </Tooltip>
-                                                <Tooltip text="Print / Cetak Barcode" position="top">
-                                                    <button onClick={() => handlePrintBatch(batch.id)} className="text-slate-400 hover:text-blue-500 hover:bg-blue-50 transition-all p-1.5 rounded-lg active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed" disabled={batch.status === 'Suspended'}>
-                                                        <Printer size={16} />
+                                                <Tooltip text="Download PDF" position="top">
+                                                    <button onClick={() => handleDownloadBatchPdf(batch.id)} className="text-slate-400 hover:text-blue-500 hover:bg-blue-50 transition-all p-1.5 rounded-lg active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed" disabled={batch.status === 'Suspended' || isPending}>
+                                                        <Download size={16} />
                                                     </button>
                                                 </Tooltip>
                                                 <Tooltip text="Hapus Seluruh Batch" position="top">
-                                                    <button onClick={() => handleDeleteBatch(batch.id)} className="text-slate-400 hover:text-red-500 hover:bg-red-50 transition-all p-1.5 rounded-lg active:scale-95">
+                                                    <button disabled={isPending} onClick={() => handleDeleteBatch(batch.id)} className="text-slate-400 hover:text-red-500 hover:bg-red-50 transition-all p-1.5 rounded-lg active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed">
                                                         <Trash2 size={16} />
                                                     </button>
                                                 </Tooltip>
                                             </div>
                                         </td>
                                     </tr>
-                                ))
+                                )})
                             )}
                         </tbody>
                     </table>
@@ -2608,11 +3376,13 @@ export default function Dashboard({ databaseBrands, databaseCategories }) {
                             <div className="p-6 bg-slate-50">
                                 <p className="text-xs text-slate-500 mb-1 uppercase font-semibold">Batch ID</p>
                                 <p className="font-mono text-sm bg-white border border-slate-200 py-2 rounded-lg text-slate-800 font-bold tracking-widest">{generatedQR.batchId}</p>
+                                <p className="text-xs text-slate-500 mb-1 mt-4 uppercase font-semibold">Contoh Kode Verifikasi</p>
+                                <p className="font-mono text-xs bg-white border border-slate-200 py-2 rounded-lg text-slate-800 font-bold tracking-wider">{generatedQR.code || '-'}</p>
                             </div>
                             <div className="p-4 flex gap-3">
                                 <button onClick={() => setIsTagModalOpen(false)} className="flex-1 py-2.5 rounded-lg font-medium text-slate-600 bg-white border border-slate-200 hover:bg-slate-50 transition-all active:scale-95 text-sm">Tutup</button>
-                                <button onClick={() => { setIsTagModalOpen(false); handlePrintBatch(generatedQR.batchId); }} className="flex-1 py-2.5 rounded-lg font-medium text-white bg-blue-600 hover:bg-blue-700 transition-all shadow-sm active:scale-95 text-sm flex items-center justify-center gap-2">
-                                    <Printer size={16} /> Cetak Batch
+                                <button onClick={() => { setIsTagModalOpen(false); handleDownloadBatchPdf(generatedQR.batchId); }} className="flex-1 py-2.5 rounded-lg font-medium text-white bg-blue-600 hover:bg-blue-700 transition-all shadow-sm active:scale-95 text-sm flex items-center justify-center gap-2">
+                                    <Download size={16} /> Download PDF
                                 </button>
                             </div>
                         </div>
@@ -2623,93 +3393,132 @@ export default function Dashboard({ databaseBrands, databaseCategories }) {
     };
 
     const UserManager = () => {
-        const filteredUsers = systemUsers.filter(u =>
-            u.name.toLowerCase().includes(globalSearch.toLowerCase()) ||
-            u.email.toLowerCase().includes(globalSearch.toLowerCase()) ||
-            u.role.toLowerCase().includes(globalSearch.toLowerCase())
-        ).sort((a, b) => {
-            const dir = userSort.direction === 'asc' ? 1 : -1;
-            if (userSort.key === 'name') return a.name.localeCompare(b.name) * dir;
-            if (userSort.key === 'role') return a.role.localeCompare(b.role) * dir;
-            if (userSort.key === 'status') {
-                if (a.status === b.status) return 0;
-                return (a.status === 'Aktif' ? -1 : 1) * dir;
-            }
-            return (a.id - b.id) * dir;
-        });
+        const userSearchQuery = globalSearch.toLowerCase().trim();
+        const filteredUsers = systemUsers
+            .filter((user) =>
+                !userSearchQuery ||
+                user.name.toLowerCase().includes(userSearchQuery) ||
+                user.email.toLowerCase().includes(userSearchQuery) ||
+                normalizeUserRole(user.role).toLowerCase().includes(userSearchQuery)
+            )
+            .sort((a, b) => {
+                const dir = userSort.direction === 'asc' ? 1 : -1;
+                if (userSort.key === 'name') return a.name.localeCompare(b.name) * dir;
+                if (userSort.key === 'role') return normalizeUserRole(a.role).localeCompare(normalizeUserRole(b.role)) * dir;
+                if (userSort.key === 'status') return (normalizeUserStatus(a.status) - normalizeUserStatus(b.status)) * dir;
+                const idA = Number(a.id);
+                const idB = Number(b.id);
+                const normalizedIdA = Number.isFinite(idA) ? idA : Number.MIN_SAFE_INTEGER;
+                const normalizedIdB = Number.isFinite(idB) ? idB : Number.MIN_SAFE_INTEGER;
+                return (normalizedIdA - normalizedIdB) * dir;
+            });
 
         return (
             <div className="space-y-6 animate-in fade-in duration-500">
                 <PageAlert text="Kelola akses pengguna sistem di sini. Klik pada judul kolom di tabel untuk mengurutkan data." />
-                <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-x-auto">
-                    <table className="w-full text-left whitespace-nowrap">
-                        <thead className="bg-slate-50 border-b border-slate-200">
-                            <tr>
-                                <th className="px-6 py-4 font-semibold text-slate-600 text-sm cursor-pointer hover:bg-slate-100 transition-colors group select-none" onClick={() => handleSortChange('name', userSort, setUserSort)}>
-                                    <div className="flex items-center gap-2">Informasi Pengguna <SortIcon columnKey="name" sortConfig={userSort} /></div>
-                                </th>
-                                <th className="px-6 py-4 font-semibold text-slate-600 text-sm cursor-pointer hover:bg-slate-100 transition-colors group select-none" onClick={() => handleSortChange('role', userSort, setUserSort)}>
-                                    <div className="flex items-center gap-2">Role Akses <SortIcon columnKey="role" sortConfig={userSort} /></div>
-                                </th>
-                                <th className="px-6 py-4 font-semibold text-slate-600 text-sm cursor-pointer hover:bg-slate-100 transition-colors group select-none" onClick={() => handleSortChange('status', userSort, setUserSort)}>
-                                    <div className="flex items-center gap-2">Status <SortIcon columnKey="status" sortConfig={userSort} /></div>
-                                </th>
-                                <th className="px-6 py-4 font-semibold text-slate-600 text-sm text-center">Aksi</th>
-                            </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100">
-                            {filteredUsers.map((user) => (
-                                <tr key={user.id} className={`transition-colors ${user.status === 'Aktif' ? 'hover:bg-slate-50' : 'bg-slate-50/50 grayscale-[20%]'}`}>
-                                    <td className="px-6 py-4">
-                                        <div className="flex items-center gap-3">
-                                            <div className={`h-10 w-10 rounded-full flex items-center justify-center font-bold ${user.status === 'Aktif' ? 'bg-[#C1986E]/10 text-[#C1986E]' : 'bg-slate-200 text-slate-500'}`}>
-                                                {user.name.charAt(0).toUpperCase()}
-                                            </div>
-                                            <div>
-                                                <p className={`font-semibold text-sm ${user.status === 'Aktif' ? 'text-slate-800' : 'text-slate-500'}`}>{user.name}</p>
-                                                <p className="text-xs text-slate-500 mt-0.5">{user.email}</p>
-                                            </div>
-                                        </div>
-                                    </td>
-                                    <td className="px-6 py-4">
-                                        <span className={`text-xs px-3 py-1.5 rounded-full font-medium ${user.status === 'Aktif' ? (user.role === 'Super Admin' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700') : 'bg-slate-200 text-slate-600'}`}>
-                                            {user.role}
-                                        </span>
-                                    </td>
-                                    <td className="px-6 py-4">
-                                        {user.status === "Aktif" ? (
-                                            <span className="bg-emerald-100 text-emerald-700 text-xs px-2.5 py-1 rounded-full font-medium flex items-center gap-1 w-fit">
-                                                <CheckCircle2 size={12} /> Aktif
-                                            </span>
-                                        ) : (
-                                            <span className="bg-slate-200 text-slate-500 text-xs px-2.5 py-1 rounded-full font-medium flex items-center gap-1 w-fit">
-                                                <X size={12} /> Non-aktif
-                                            </span>
-                                        )}
-                                    </td>
-                                    <td className="px-6 py-4 text-center">
-                                        <div className="flex items-center justify-center gap-2">
-                                            <Tooltip text={user.status === "Aktif" ? "Nonaktifkan Akses" : "Aktifkan Akses"} position="top">
-                                                <ToggleSwitch
-                                                    checked={user.status === 'Aktif'}
-                                                    onChange={() => handleToggleUserStatus(user.id)}
-                                                />
-                                            </Tooltip>
-                                            <Tooltip text="Reset Sandi" position="top">
-                                                <button onClick={() => handleOpenPasswordModal(user)} className="text-slate-400 hover:text-blue-500 hover:bg-blue-50 transition-all p-1.5 rounded-lg active:scale-95"><Key size={16} /></button>
-                                            </Tooltip>
-                                            <Tooltip text="Edit User" position="top">
-                                                <button onClick={() => handleEditUser(user)} className="text-slate-400 hover:text-[#C1986E] hover:bg-[#C1986E]/10 transition-all p-1.5 rounded-lg active:scale-95"><Edit size={16} /></button>
-                                            </Tooltip>
-                                            <Tooltip text="Hapus User" position="top">
-                                                <button onClick={() => handleDeleteUser(user.id)} className="text-slate-400 hover:text-red-500 hover:bg-red-50 transition-all p-1.5 rounded-lg active:scale-95"><Trash2 size={16} /></button>
-                                            </Tooltip>
-                                        </div>
-                                    </td>
+
+                <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
+                    <div className="p-4 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-50/60">
+                        <h3 className="font-semibold text-slate-800 flex items-center gap-2">
+                            <Users size={18} className="text-[#C1986E]" /> Daftar Pengguna Sistem
+                        </h3>
+                        <button
+                            onClick={() => {
+                                if (isSavingUser) return;
+                                userSubmitLockRef.current = false;
+                                setUserInput(createEmptyUserInput());
+                                setEditingUserId(null);
+                                setIsUserModalOpen(true);
+                            }}
+                            disabled={isSavingUser}
+                            className="bg-[#C1986E] text-white px-4 py-2 rounded-lg hover:bg-[#A37E58] transition-all active:scale-95 text-sm font-medium flex items-center justify-center gap-2 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            <Plus size={16} /> Tambah Pengguna
+                        </button>
+                    </div>
+
+                    <div className="overflow-x-auto">
+                        <table className="w-full min-w-[860px] table-fixed text-left whitespace-nowrap">
+                            <thead className="bg-slate-50 border-b border-slate-200">
+                                <tr>
+                                    <th className="w-[40%] px-6 py-4 font-semibold text-slate-600 text-sm cursor-pointer hover:bg-slate-100 transition-colors group select-none" onClick={() => handleSortChange('name', userSort, setUserSort)}>
+                                        <div className="flex items-center gap-2">Informasi Pengguna <SortIcon columnKey="name" sortConfig={userSort} /></div>
+                                    </th>
+                                    <th className="w-[18%] px-6 py-4 font-semibold text-slate-600 text-sm cursor-pointer hover:bg-slate-100 transition-colors group select-none" onClick={() => handleSortChange('role', userSort, setUserSort)}>
+                                        <div className="flex items-center gap-2">Role Akses <SortIcon columnKey="role" sortConfig={userSort} /></div>
+                                    </th>
+                                    <th className="w-[16%] px-6 py-4 font-semibold text-slate-600 text-sm cursor-pointer hover:bg-slate-100 transition-colors group select-none" onClick={() => handleSortChange('status', userSort, setUserSort)}>
+                                        <div className="flex items-center gap-2">Status <SortIcon columnKey="status" sortConfig={userSort} /></div>
+                                    </th>
+                                    <th className="w-[26%] px-6 py-4 font-semibold text-slate-600 text-sm text-center">Aksi</th>
                                 </tr>
-                            ))}
-                        </tbody>
-                    </table>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                                {filteredUsers.length === 0 ? (
+                                    <tr>
+                                        <td colSpan="4" className="px-6 py-10 text-center text-sm text-slate-400">
+                                            Tidak ada data pengguna yang cocok.
+                                        </td>
+                                    </tr>
+                                ) : filteredUsers.map((user) => {
+                                    const userIsActive = isUserActive(user.status);
+                                    const isPending = isUserPendingAction(user.id);
+
+                                    return (
+                                        <tr key={user.id} className={`transition-colors ${userIsActive ? 'hover:bg-slate-50' : 'bg-slate-50/60 grayscale-[20%]'}`}>
+                                            <td className="px-6 py-4">
+                                                <div className="flex items-center gap-3">
+                                                    <div className={`h-10 w-10 rounded-full flex items-center justify-center font-bold shrink-0 ${userIsActive ? 'bg-[#C1986E]/10 text-[#C1986E]' : 'bg-slate-200 text-slate-500'}`}>
+                                                        {(user.name || '?').charAt(0).toUpperCase()}
+                                                    </div>
+                                                    <div className="min-w-0">
+                                                        <p className={`font-semibold text-sm truncate ${userIsActive ? 'text-slate-800' : 'text-slate-500'}`}>{user.name}</p>
+                                                        <p className="text-xs text-slate-500 mt-0.5 truncate">{user.email}</p>
+                                                    </div>
+                                                </div>
+                                            </td>
+                                            <td className="px-6 py-4">
+                                                <span className={`inline-flex items-center justify-center min-w-[112px] text-xs px-3 py-1.5 rounded-full font-medium ${userIsActive ? (normalizeUserRole(user.role) === 'Super Admin' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700') : 'bg-slate-200 text-slate-600'}`}>
+                                                    {normalizeUserRole(user.role)}
+                                                </span>
+                                            </td>
+                                            <td className="px-6 py-4">
+                                                {userIsActive ? (
+                                                    <span className="inline-flex items-center justify-center min-w-[92px] bg-emerald-100 text-emerald-700 text-xs px-2.5 py-1 rounded-full font-medium gap-1">
+                                                        <CheckCircle2 size={12} /> Aktif
+                                                    </span>
+                                                ) : (
+                                                    <span className="inline-flex items-center justify-center min-w-[92px] bg-slate-200 text-slate-500 text-xs px-2.5 py-1 rounded-full font-medium gap-1">
+                                                        <X size={12} /> Non-aktif
+                                                    </span>
+                                                )}
+                                            </td>
+                                            <td className="px-6 py-4 text-center">
+                                                <div className="flex items-center justify-center gap-2">
+                                                    <Tooltip text={userIsActive ? "Nonaktifkan Akses" : "Aktifkan Akses"} position="top">
+                                                        <ToggleSwitch
+                                                            checked={userIsActive}
+                                                            onChange={() => handleToggleUserStatus(user)}
+                                                            disabled={isPending}
+                                                        />
+                                                    </Tooltip>
+                                                    <Tooltip text="Reset Sandi" position="top">
+                                                        <button disabled={isPending} onClick={() => handleOpenPasswordModal(user)} className="text-slate-400 hover:text-blue-500 hover:bg-blue-50 transition-all p-1.5 rounded-lg active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"><Key size={16} /></button>
+                                                    </Tooltip>
+                                                    <Tooltip text="Edit User" position="top">
+                                                        <button disabled={isPending} onClick={() => handleEditUser(user)} className="text-slate-400 hover:text-[#C1986E] hover:bg-[#C1986E]/10 transition-all p-1.5 rounded-lg active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"><Edit size={16} /></button>
+                                                    </Tooltip>
+                                                    <Tooltip text="Hapus User" position="top">
+                                                        <button disabled={isPending} onClick={() => handleDeleteUser(user.id)} className="text-slate-400 hover:text-red-500 hover:bg-red-50 transition-all p-1.5 rounded-lg active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"><Trash2 size={16} /></button>
+                                                    </Tooltip>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
 
                 {/* Modal Ubah Password */}
@@ -2757,8 +3566,8 @@ export default function Dashboard({ databaseBrands, databaseCategories }) {
                                     </div>
                                 </div>
                                 <div className="bg-slate-50 border-t border-slate-100 p-4 px-6 flex justify-end gap-3">
-                                    <button type="button" onClick={() => setIsPasswordModalOpen(false)} className="px-6 py-2.5 rounded-lg font-medium text-slate-600 bg-white border border-slate-200 hover:bg-slate-50 transition-all active:scale-95 text-sm">Batal</button>
-                                    <button type="submit" className="px-6 py-2.5 rounded-lg font-medium text-white bg-[#C1986E] hover:bg-[#A37E58] transition-all shadow-sm active:scale-95 text-sm">Simpan Sandi Baru</button>
+                                    <button type="button" disabled={isSavingPassword} onClick={() => setIsPasswordModalOpen(false)} className="px-6 py-2.5 rounded-lg font-medium text-slate-600 bg-white border border-slate-200 hover:bg-slate-50 transition-all active:scale-95 text-sm disabled:opacity-40 disabled:cursor-not-allowed">Batal</button>
+                                    <button type="submit" disabled={isSavingPassword} className="px-6 py-2.5 rounded-lg font-medium text-white bg-[#C1986E] hover:bg-[#A37E58] transition-all shadow-sm active:scale-95 text-sm disabled:opacity-60 disabled:cursor-not-allowed">{isSavingPassword ? "Menyimpan..." : "Simpan Sandi Baru"}</button>
                                 </div>
                             </form>
                         </div>
@@ -2769,7 +3578,7 @@ export default function Dashboard({ databaseBrands, databaseCategories }) {
                 {isUserModalOpen && (
                     <div
                         className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
-                        onClick={handleCancelEditUser} // Fungsi tutup saat klik background
+                        onClick={() => { if (!isSavingUser) handleCancelEditUser(); }} // Fungsi tutup saat klik background
                     >
                         <div
                             className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-200 flex flex-col"
@@ -2780,7 +3589,7 @@ export default function Dashboard({ databaseBrands, databaseCategories }) {
                                     {editingUserId ? <Edit size={18} className="text-[#C1986E]" /> : <Users size={18} className="text-[#C1986E]" />}
                                     {editingUserId ? "Edit Data Pengguna" : "Tambah Pengguna Baru"}
                                 </h3>
-                                <button onClick={handleCancelEditUser} className="text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-all p-1.5 rounded-lg active:scale-95"><X size={18} /></button>
+                                <button disabled={isSavingUser} onClick={handleCancelEditUser} className="text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-all p-1.5 rounded-lg active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"><X size={18} /></button>
                             </div>
                             <form onSubmit={handleSaveUser} className="flex flex-col">
                                 <div className="p-6 space-y-4">
@@ -2817,6 +3626,17 @@ export default function Dashboard({ databaseBrands, databaseCategories }) {
                                             <option value="Super Admin">Super Admin (Akses Penuh)</option>
                                         </select>
                                     </div>
+                                    <div className="space-y-1.5">
+                                        <label className="text-xs font-semibold text-slate-500 uppercase">Status Akses</label>
+                                        <select
+                                            className="w-full border border-slate-200 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-[#C1986E] text-sm bg-white"
+                                            value={String(normalizeUserStatus(userInput.status))}
+                                            onChange={(e) => setUserInput({ ...userInput, status: Number(e.target.value) })}
+                                        >
+                                            <option value="1">Aktif (Bisa Login)</option>
+                                            <option value="0">Non-aktif (Tidak Bisa Login)</option>
+                                        </select>
+                                    </div>
                                     {!editingUserId && (
                                         <div className="space-y-1.5">
                                             <label className="text-xs font-semibold text-slate-500 uppercase">Sandi Awal</label>
@@ -2827,13 +3647,14 @@ export default function Dashboard({ databaseBrands, databaseCategories }) {
                                                 value={userInput.password}
                                                 onChange={(e) => setUserInput({ ...userInput, password: e.target.value })}
                                                 required={!editingUserId}
+                                                minLength={8}
                                             />
                                         </div>
                                     )}
                                 </div>
                                 <div className="bg-slate-50 border-t border-slate-100 p-4 px-6 flex justify-end gap-3">
-                                    <button type="button" onClick={handleCancelEditUser} className="px-6 py-2.5 rounded-lg font-medium text-slate-600 bg-white border border-slate-200 hover:bg-slate-50 transition-all active:scale-95 text-sm">Batal</button>
-                                    <button type="submit" className="px-6 py-2.5 rounded-lg font-medium text-white bg-[#C1986E] hover:bg-[#A37E58] transition-all shadow-sm active:scale-95 text-sm">{editingUserId ? "Simpan Perubahan" : "Buat Akun"}</button>
+                                    <button type="button" disabled={isSavingUser} onClick={handleCancelEditUser} className="px-6 py-2.5 rounded-lg font-medium text-slate-600 bg-white border border-slate-200 hover:bg-slate-50 transition-all active:scale-95 text-sm disabled:opacity-40 disabled:cursor-not-allowed">Batal</button>
+                                    <button type="submit" disabled={isSavingUser} className="px-6 py-2.5 rounded-lg font-medium text-white bg-[#C1986E] hover:bg-[#A37E58] transition-all shadow-sm active:scale-95 text-sm disabled:opacity-60 disabled:cursor-not-allowed">{isSavingUser ? "Menyimpan..." : (editingUserId ? "Simpan Perubahan" : "Buat Akun")}</button>
                                 </div>
                             </form>
                         </div>
@@ -3098,11 +3919,11 @@ export default function Dashboard({ databaseBrands, databaseCategories }) {
                         <>
                             <div className="flex items-center gap-3 overflow-hidden">
                                 <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#C1986E] to-[#A37E58] text-white flex items-center justify-center font-bold flex-shrink-0 text-sm shadow-sm">
-                                    AU
+                                    {sidebarUserInitials}
                                 </div>
                                 <div className="flex flex-col overflow-hidden">
-                                    <span className="text-sm font-bold text-slate-800 truncate">Admin Utama</span>
-                                    <span className="text-[10px] text-slate-500 truncate">Super Admin</span>
+                                    <span className="text-sm font-bold text-slate-800 truncate">{sidebarUserName}</span>
+                                    <span className="text-[10px] text-slate-500 truncate">{sidebarUserRole}</span>
                                 </div>
                             </div>
                             <Tooltip text="Keluar Sistem" position="top">
