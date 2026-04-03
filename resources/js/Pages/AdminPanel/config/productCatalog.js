@@ -1,52 +1,5 @@
 import { Droplets, FlaskConical, Sparkles } from 'lucide-react';
 
-export const INITIAL_CATEGORY_DATA = [
-    {
-        id: 1,
-        name: "Perawatan & Kecantikan",
-        subCategories: [
-            {
-                id: 11,
-                name: "Parfum & Wewangian",
-                subSubCategories: [
-                    { id: 111, name: "Eau De Parfum (EDP)" },
-                    { id: 112, name: "Eau De Toilette (EDT)" },
-                    { id: 113, name: "Body Mist / Cologne" },
-                    { id: 114, name: "Extrait De Parfum" }
-                ]
-            },
-            {
-                id: 12,
-                name: "Perawatan Wajah",
-                subSubCategories: [
-                    { id: 121, name: "Pembersih Wajah" },
-                    { id: 122, name: "Toner" },
-                    { id: 123, name: "Pelembab Wajah" },
-                    { id: 124, name: "Minyak Wajah" },
-                    { id: 125, name: "Facial Mist" },
-                    { id: 126, name: "Serum & Essence Wajah" },
-                    { id: 127, name: "Scrub & Peel Wajah" },
-                    { id: 128, name: "Masker Wajah" },
-                    { id: 129, name: "Treatment Mata" },
-                    { id: 130, name: "Treatment Bibir" }
-                ]
-            },
-            {
-                id: 13,
-                name: "Perawatan Tubuh",
-                subSubCategories: [
-                    { id: 131, name: "Sabun Mandi" },
-                    { id: 132, name: "Scrub & Peel Tubuh" },
-                    { id: 133, name: "Masker Tubuh" },
-                    { id: 134, name: "Minyak Tubuh" },
-                    { id: 135, name: "Body Cream, Lotion & Butter" },
-                    { id: 136, name: "Deodoran" }
-                ]
-            }
-        ]
-    }
-];
-
 export const PRODUCT_SPEC_SCHEMA = {
     11: {
         title: "Spesifikasi Wewangian",

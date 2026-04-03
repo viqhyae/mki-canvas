@@ -24,19 +24,19 @@ import {
 export default function createProductManager(context) {
     const {
         batches,
+        buildProductImageUrl,
         brands,
         globalSearch,
         handleDeleteProduct,
         handleEditProduct,
         handleSortChange,
+        openCreateProductForm,
         PageAlert,
         PRODUCT_SPEC_SCHEMA,
         products,
         productSort,
         selectedProductDetail,
         setActiveTab,
-        setEditingProductId,
-        setProductInput,
         setProductSort,
         setSelectedProductDetail,
         SortIcon,
@@ -55,11 +55,13 @@ export default function createProductManager(context) {
 
         const filteredProducts = products.filter(p =>
             p.name.toLowerCase().includes(globalSearch.toLowerCase()) ||
+            p.skuCode.toLowerCase().includes(globalSearch.toLowerCase()) ||
             p.brandName.toLowerCase().includes(globalSearch.toLowerCase()) ||
             p.categoryPath.toLowerCase().includes(globalSearch.toLowerCase())
         ).sort((a, b) => {
             const dir = productSort.direction === 'asc' ? 1 : -1;
             if (productSort.key === 'name') return a.name.localeCompare(b.name) * dir;
+            if (productSort.key === 'sku') return a.skuCode.localeCompare(b.skuCode) * dir;
             if (productSort.key === 'category') return a.categoryPath.localeCompare(b.categoryPath) * dir;
             if (productSort.key === 'tags') {
                 const tagsA = batches.filter(batch => batch.productName === a.name).reduce((sum, batch) => sum + batch.qty, 0);
@@ -68,6 +70,9 @@ export default function createProductManager(context) {
             }
             return (a.id - b.id) * dir;
         });
+        const detailImageSrc = selectedProductDetail
+            ? buildProductImageUrl(selectedProductDetail?.image_url || selectedProductDetail?.image_public_url)
+            : null;
 
         return (
             <div className="space-y-6 animate-in fade-in duration-500">
@@ -78,11 +83,7 @@ export default function createProductManager(context) {
                         <span className="text-sm font-medium text-slate-500">Total: {filteredProducts.length} Produk SKU</span>
                     </div>
                     <button
-                        onClick={() => {
-                            setEditingProductId(null);
-                            setProductInput({ name: '', brandId: '', description: '', catL1: '', catL2: '', catL3: '', skuCode: '', dynamicFields: {} });
-                            setActiveTab('product_form');
-                        }}
+                        onClick={openCreateProductForm}
                         className="bg-[#C1986E] hover:bg-[#A37E58] text-white px-5 py-2.5 rounded-lg font-medium transition-all shadow-sm active:scale-95 text-sm flex items-center justify-center gap-2 whitespace-nowrap"
                     >
                         <Plus size={16} /> Tambah SKU Baru
@@ -116,13 +117,18 @@ export default function createProductManager(context) {
                                     const tagCount = batches
                                         .filter(b => b.productName === product.name)
                                         .reduce((total, b) => total + b.qty, 0);
+                                    const productImageSrc = buildProductImageUrl(product?.image_url || product?.image_public_url);
 
                                     return (
                                         <tr key={product.id} className="hover:bg-slate-50 transition-colors">
                                             <td className="px-6 py-4">
                                                 <div className="flex items-center gap-3">
-                                                    <div className="h-10 w-10 bg-slate-100 rounded-lg flex items-center justify-center text-slate-400 border border-slate-200 flex-shrink-0">
-                                                        <Package size={18} />
+                                                    <div className="h-10 w-10 bg-slate-100 rounded-lg flex items-center justify-center text-slate-400 border border-slate-200 flex-shrink-0 overflow-hidden">
+                                                        {productImageSrc ? (
+                                                            <img src={productImageSrc} alt={product.name} className="h-full w-full object-cover" loading="lazy" />
+                                                        ) : (
+                                                            <Package size={18} />
+                                                        )}
                                                     </div>
                                                     <div className="flex flex-col max-w-[200px]">
                                                         <span className="font-medium text-slate-800 text-sm truncate" title={product.name}>{product.name}</span>
@@ -195,12 +201,17 @@ export default function createProductManager(context) {
 
                             <div className="p-6 overflow-y-auto custom-scrollbar">
                                 <div className="flex flex-col md:flex-row gap-8">
-
                                     {/* Kolom Kiri: Visual & Statistik Utama */}
                                     <div className="w-full md:w-1/3 flex flex-col gap-4 shrink-0">
-                                        <div className="w-full aspect-square bg-slate-50 border border-slate-200 rounded-2xl flex flex-col items-center justify-center text-slate-400 shadow-inner">
-                                            <ImageIcon size={48} className="mb-3 text-slate-300" />
-                                            <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Preview Foto</span>
+                                        <div className="w-full aspect-square bg-slate-50 border border-slate-200 rounded-2xl flex flex-col items-center justify-center text-slate-400 shadow-inner overflow-hidden">
+                                            {detailImageSrc ? (
+                                                <img src={detailImageSrc} alt={selectedProductDetail.name} className="h-full w-full object-cover" />
+                                            ) : (
+                                                <>
+                                                    <ImageIcon size={48} className="mb-3 text-slate-300" />
+                                                    <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Preview Foto</span>
+                                                </>
+                                            )}
                                         </div>
 
                                         <div className="bg-blue-50 border border-blue-100 p-5 rounded-2xl flex flex-col items-center justify-center text-center shadow-sm">

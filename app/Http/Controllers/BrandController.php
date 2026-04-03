@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Brand;
 use App\Models\ProductCategory;
+use App\Models\ProductSku;
 use App\Models\TagBatch;
 use App\Models\User;
 use Illuminate\Http\Request;
@@ -18,6 +19,7 @@ use Illuminate\Support\Str;
 class BrandController extends Controller {
     public function index() {
         $databaseCategories = [];
+        $databaseProducts = [];
         $databaseUsers = [];
         $databaseTagBatches = [];
 
@@ -91,6 +93,15 @@ class BrandController extends Controller {
                 ->all();
         }
 
+        if (Schema::hasTable('product_skus')) {
+            $databaseProducts = ProductSku::query()
+                ->with(['brand', 'categoryL1', 'categoryL2', 'categoryL3'])
+                ->latest('id')
+                ->get()
+                ->map(fn (ProductSku $productSku) => $this->productPayload($productSku))
+                ->all();
+        }
+
         return Inertia::render('AdminPanel', [
             'databaseBrands' => Brand::query()
                 ->latest('id')
@@ -98,6 +109,7 @@ class BrandController extends Controller {
                 ->map(fn (Brand $brand) => $this->brandPayload($brand))
                 ->all(),
             'databaseCategories' => $databaseCategories,
+            'databaseProducts' => $databaseProducts,
             'databaseUsers' => $databaseUsers,
             'databaseTagBatches' => $databaseTagBatches,
         ]);
@@ -281,6 +293,53 @@ class BrandController extends Controller {
             'created_at' => optional($tagBatch->created_at)->toISOString(),
             'updated_at' => optional($tagBatch->updated_at)->toISOString(),
         ];
+    }
+
+    private function productPayload(ProductSku $productSku): array
+    {
+        $imagePath = $this->normalizeProductImagePath($productSku->image_url);
+        $categoryParts = array_values(array_filter([
+            $productSku->categoryL1?->name,
+            $productSku->categoryL2?->name,
+            $productSku->categoryL3?->name,
+        ], fn ($name) => is_string($name) && trim($name) !== ''));
+
+        return [
+            'id' => $productSku->id,
+            'name' => $productSku->name,
+            'skuCode' => $productSku->sku_code,
+            'brandId' => (int) ($productSku->brand_id ?? 0),
+            'brandName' => $productSku->brand?->name ?? '-',
+            'description' => $productSku->description ?: '-',
+            'image_url' => $imagePath,
+            'image_public_url' => $imagePath ? asset('storage/' . ltrim($imagePath, '/')) : null,
+            'categoryPath' => $categoryParts !== [] ? implode(' > ', $categoryParts) : '-',
+            'catL1' => (int) ($productSku->category_l1_id ?? 0),
+            'catL2' => (int) ($productSku->category_l2_id ?? 0),
+            'catL3' => (int) ($productSku->category_l3_id ?? 0),
+            'dynamicFields' => is_array($productSku->dynamic_fields) ? $productSku->dynamic_fields : [],
+            'updated_at' => optional($productSku->updated_at)->toISOString(),
+        ];
+    }
+
+    private function normalizeProductImagePath(?string $imagePath): ?string
+    {
+        $path = trim((string) ($imagePath ?? ''));
+        if ($path === '' || in_array(strtolower($path), ['0', 'null', 'undefined', 'false'], true)) {
+            return null;
+        }
+
+        if (preg_match('#^https?://#i', $path)) {
+            $parsedPath = parse_url($path, PHP_URL_PATH);
+            $path = is_string($parsedPath) ? $parsedPath : $path;
+        }
+
+        $path = ltrim($path, '/');
+        if (str_starts_with($path, 'storage/')) {
+            $path = substr($path, strlen('storage/'));
+        }
+
+        return $path !== '' ? $path : null;
     }
 
     private function storeLogoFile(UploadedFile $logoFile): ?string

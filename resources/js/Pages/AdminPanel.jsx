@@ -16,7 +16,7 @@ import {
     SYSTEM_ITEMS
 } from './AdminPanel/Sidebar';
 import createAdminPanelViews from './AdminPanel/Views/createAdminPanelViews';
-import { INITIAL_CATEGORY_DATA, PRODUCT_SPEC_SCHEMA } from './AdminPanel/config/productCatalog';
+import { PRODUCT_SPEC_SCHEMA } from './AdminPanel/config/productCatalog';
 import StatCard from './AdminPanel/components/StatCard';
 import PageAlert from './AdminPanel/components/PageAlert';
 import ToggleSwitch from './AdminPanel/components/ToggleSwitch';
@@ -24,7 +24,13 @@ import Tooltip from './AdminPanel/components/Tooltip';
 import LeafletMap from './AdminPanel/components/LeafletMap';
 import SortIcon from './AdminPanel/components/SortIcon';
 
-export default function AdminPanel({ databaseBrands, databaseCategories, databaseUsers, databaseTagBatches }) {
+export default function AdminPanel({
+    databaseBrands,
+    databaseCategories,
+    databaseUsers,
+    databaseTagBatches,
+    databaseProducts,
+}) {
     const authUser = usePage().props?.auth?.user || null;
     const [activeTab, setActiveTab] = useState('dashboard');
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -133,7 +139,34 @@ export default function AdminPanel({ databaseBrands, databaseCategories, databas
             randomLength: normalizeBatchRandomLength(batch?.settings),
         },
     });
+    const normalizeProductRecord = (product) => ({
+        id: Number(product?.id || 0),
+        name: String(product?.name || '').trim(),
+        brandId: Number(product?.brandId || 0),
+        brandName: String(product?.brandName || '-').trim() || '-',
+        description: String(product?.description || '').trim() || '-',
+        image_url: String(product?.image_url || product?.image_public_url || '').trim(),
+        categoryPath: String(product?.categoryPath || '-').trim() || '-',
+        catL1: Number(product?.catL1 || 0),
+        catL2: Number(product?.catL2 || 0),
+        catL3: Number(product?.catL3 || 0),
+        skuCode: String(product?.skuCode || '').trim().toUpperCase(),
+        dynamicFields: (product?.dynamicFields && typeof product.dynamicFields === 'object' && !Array.isArray(product.dynamicFields))
+            ? product.dynamicFields
+            : {},
+        updated_at: product?.updated_at || null,
+    });
     const createEmptyUserInput = () => ({ name: '', email: '', role: 'Brand Owner', password: '', status: 1 });
+    const createEmptyProductInput = () => ({
+        name: '',
+        brandId: '',
+        description: '',
+        catL1: '',
+        catL2: '',
+        catL3: '',
+        skuCode: '',
+        dynamicFields: {},
+    });
     const normalizeComparableId = (value) => String(value ?? '');
     const isSameEntityId = (left, right) => normalizeComparableId(left) === normalizeComparableId(right);
     const generateTempNumericId = () => (Date.now() * 1000) + Math.floor(Math.random() * 1000);
@@ -349,11 +382,59 @@ export default function AdminPanel({ databaseBrands, databaseCategories, databas
         return `/storage/${normalized}`;
     };
     const buildBrandLogoSrc = (brand) => buildBrandLogoUrl(brand?.logo_url || brand?.logo_public_url);
+    const buildProductImageUrl = (imageUrl) => {
+        if (!imageUrl || typeof imageUrl !== 'string') return null;
+
+        const trimmed = imageUrl.trim();
+        if (!trimmed) return null;
+        if (['0', 'null', 'undefined', 'false'].includes(trimmed.toLowerCase())) {
+            return null;
+        }
+
+        if (trimmed.startsWith('blob:') || trimmed.startsWith('data:image/')) {
+            return trimmed;
+        }
+
+        if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+            try {
+                const parsed = new URL(trimmed);
+                if (parsed.pathname.startsWith('/storage/')) {
+                    return `${parsed.pathname}${parsed.search}`;
+                }
+
+                const storageIdx = parsed.pathname.indexOf('/storage/');
+                if (storageIdx >= 0) {
+                    return `${parsed.pathname.slice(storageIdx)}${parsed.search}`;
+                }
+            } catch {
+                return trimmed;
+            }
+
+            return trimmed;
+        }
+
+        let normalized = trimmed.replaceAll('\\', '/').replace(/^\/+/, '');
+        if (normalized.startsWith('public/')) {
+            normalized = normalized.slice('public/'.length);
+        }
+        if (normalized.startsWith('storage/')) {
+            return `/${normalized}`;
+        }
+
+        return `/storage/${normalized}`;
+    };
     const logoPreviewObjectUrlRef = useRef(null);
+    const productImagePreviewObjectUrlRef = useRef(null);
     const releaseLogoPreviewObjectUrl = () => {
         if (logoPreviewObjectUrlRef.current) {
             URL.revokeObjectURL(logoPreviewObjectUrlRef.current);
             logoPreviewObjectUrlRef.current = null;
+        }
+    };
+    const releaseProductImagePreviewObjectUrl = () => {
+        if (productImagePreviewObjectUrlRef.current) {
+            URL.revokeObjectURL(productImagePreviewObjectUrlRef.current);
+            productImagePreviewObjectUrlRef.current = null;
         }
     };
     const setLogoPreviewFromServer = (logoUrl) => {
@@ -366,6 +447,16 @@ export default function AdminPanel({ databaseBrands, databaseCategories, databas
         logoPreviewObjectUrlRef.current = objectUrl;
         setLogoPreview(objectUrl);
     };
+    const setProductImagePreviewFromServer = (imageUrl) => {
+        releaseProductImagePreviewObjectUrl();
+        setProductImagePreview(buildProductImageUrl(imageUrl));
+    };
+    const setProductImagePreviewFromFile = (file) => {
+        releaseProductImagePreviewObjectUrl();
+        const objectUrl = URL.createObjectURL(file);
+        productImagePreviewObjectUrlRef.current = objectUrl;
+        setProductImagePreview(objectUrl);
+    };
 
     const [brands, setBrands] = useState((databaseBrands || []).map(normalizeBrandRecord));
     useEffect(() => {
@@ -373,10 +464,10 @@ export default function AdminPanel({ databaseBrands, databaseCategories, databas
     }, [databaseBrands]);
 
     const [categories, setCategories] = useState(
-        Array.isArray(databaseCategories) ? databaseCategories : INITIAL_CATEGORY_DATA
+        Array.isArray(databaseCategories) ? databaseCategories : []
     );
     useEffect(() => {
-        setCategories(Array.isArray(databaseCategories) ? databaseCategories : INITIAL_CATEGORY_DATA);
+        setCategories(Array.isArray(databaseCategories) ? databaseCategories : []);
     }, [databaseCategories]);
 
     const [systemUsers, setSystemUsers] = useState((databaseUsers || []).map(normalizeUserRecord));
@@ -414,57 +505,7 @@ export default function AdminPanel({ databaseBrands, databaseCategories, databas
         return activeSuperAdminCount <= 1;
     };
 
-    const [products, setProducts] = useState([
-        {
-            id: 101, name: "Luxury Rose EDP 30ml", brandId: 3, brandName: "Luxe Scents",
-            description: "Parfum wangi mawar mewah dengan botol kaca. Mengandung ekstrak mawar asli dengan ketahanan hingga 12 jam. Cocok untuk acara formal maupun daily use.",
-            categoryPath: "Perawatan & Kecantikan > Parfum & Wewangian > Eau De Parfum (EDP)",
-            catL1: 1, catL2: 11, catL3: 111,
-            skuCode: "LS-EDP-ROS-30",
-            dynamicFields: { topNotes: "Bergamot, Mandarin", baseNotes: "Vanilla, Musk, Cedarwood", longevity: "Hingga 12 Jam" }
-        },
-        {
-            id: 102, name: "Acne Fighter Night Cream", brandId: 2, brandName: "DermaBeauty",
-            description: "Krim malam untuk kulit berjerawat. Membantu meredakan kemerahan dan mengempeskan jerawat meradang dalam waktu singkat.",
-            categoryPath: "Perawatan & Kecantikan > Perawatan Wajah > Pelembab Wajah",
-            catL1: 1, catL2: 12, catL3: 123,
-            skuCode: "DB-NC-ACN-15",
-            dynamicFields: { bpom: "NA1821010001", skinType: "Berminyak & Berjerawat", ingredients: "Niacinamide 5%, Salicylic Acid, Tea Tree Extract" }
-        },
-        {
-            id: 103, name: "Gentle Facial Wash 100ml", brandId: 1, brandName: "Glow & Co",
-            description: "Pembersih wajah lembut tanpa busa untuk kulit sensitif.",
-            categoryPath: "Perawatan & Kecantikan > Perawatan Wajah > Pembersih Wajah",
-            catL1: 1, catL2: 12, catL3: 121,
-            skuCode: "GC-FW-GNT-100",
-            dynamicFields: { bpom: "NA1821010002", skinType: "Kering & Sensitif", ingredients: "Aloe Vera, Chamomile Extract" }
-        },
-        {
-            id: 104, name: "Hydrating Toner Mist", brandId: 1, brandName: "Glow & Co",
-            description: "Toner spray penyegar wajah dengan aloe vera.",
-            categoryPath: "Perawatan & Kecantikan > Perawatan Wajah > Facial Mist",
-            catL1: 1, catL2: 12, catL3: 125,
-            skuCode: "GC-TM-HYD-60",
-            dynamicFields: { bpom: "NA1821010003", skinType: "Semua Tipe Kulit", ingredients: "Hyaluronic Acid, Rose Water" }
-        },
-        {
-            id: 105, name: "Coffee Body Scrub", brandId: 5, brandName: "PureNaturals",
-            description: "Scrub mandi eksfoliasi aroma kopi.",
-            categoryPath: "Perawatan & Kecantikan > Perawatan Tubuh > Scrub & Peel Tubuh",
-            catL1: 1, catL2: 13, catL3: 132,
-            skuCode: "PN-BS-COF-250",
-            dynamicFields: {}
-        },
-        {
-            id: 106, name: "Hair & Body Perfume Sport", brandId: 6, brandName: "Men's Groom",
-            description: "Parfum rambut dan badan untuk pria aktif.",
-
-            categoryPath: "Perawatan & Kecantikan > Parfum & Wewangian > Body Mist / Cologne",
-            catL1: 1, catL2: 11, catL3: 113,
-            skuCode: "MG-BM-SPT-100",
-            dynamicFields: { topNotes: "Citrus, Mint", baseNotes: "Sandalwood, Amber", longevity: "6 - 8 Jam" }
-        }
-    ]);
+    const [products, setProducts] = useState((databaseProducts || []).map(normalizeProductRecord));
 
     const [batches, setBatches] = useState((databaseTagBatches || []).map(normalizeBatchRecord));
     const [isSavingBatch, setIsSavingBatch] = useState(false);
@@ -493,11 +534,11 @@ export default function AdminPanel({ databaseBrands, databaseCategories, databas
     const [isTagModalOpen, setIsTagModalOpen] = useState(false);
     const [generatedQR, setGeneratedQR] = useState(null);
 
-    const [productInput, setProductInput] = useState({
-        name: '', brandId: '', description: '', catL1: '', catL2: '', catL3: '', skuCode: '',
-        dynamicFields: {} // State baru untuk menyimpan inputan dinamis
-    });
+    const [productInput, setProductInput] = useState(createEmptyProductInput());
+    const [productImageFile, setProductImageFile] = useState(null);
+    const [productImagePreview, setProductImagePreview] = useState(null);
     const [editingProductId, setEditingProductId] = useState(null);
+    const [isSavingProduct, setIsSavingProduct] = useState(false);
 
     const [selectedCatL1, setSelectedCatL1] = useState(null);
     const [selectedCatL2, setSelectedCatL2] = useState(null);
@@ -513,6 +554,7 @@ export default function AdminPanel({ databaseBrands, databaseCategories, databas
     // --- STATE UNTUK FILTER SCAN ---
     const [statusFilter, setStatusFilter] = useState('Semua Status');
     const brandSubmitLockRef = useRef(false);
+    const productSubmitLockRef = useRef(false);
     const userSubmitLockRef = useRef(false);
     const categorySubmitLockRef = useRef(false);
     const tagSubmitLockRef = useRef(false);
@@ -582,8 +624,13 @@ export default function AdminPanel({ databaseBrands, databaseCategories, databas
     }, [databaseTagBatches]);
 
     useEffect(() => {
+        setProducts((databaseProducts || []).map(normalizeProductRecord));
+    }, [databaseProducts]);
+
+    useEffect(() => {
         return () => {
             releaseLogoPreviewObjectUrl();
+            releaseProductImagePreviewObjectUrl();
         };
     }, []);
 
@@ -792,84 +839,158 @@ export default function AdminPanel({ databaseBrands, databaseCategories, databas
     };
 
     // --- LOGIC HANDLERS PRODUCT ---
+    const clearProductImageDraft = () => {
+        releaseProductImagePreviewObjectUrl();
+        setProductImageFile(null);
+        setProductImagePreview(null);
+    };
+
+    const resetProductDraft = () => {
+        productSubmitLockRef.current = false;
+        setIsSavingProduct(false);
+        setProductInput(createEmptyProductInput());
+        clearProductImageDraft();
+        setEditingProductId(null);
+    };
+
+    const openCreateProductForm = () => {
+        resetProductDraft();
+        setActiveTab('product_form');
+    };
+
     const handleSaveProduct = (e) => {
         e.preventDefault();
-        if (!productInput.name || !productInput.brandId || !productInput.catL3 || !productInput.skuCode) {
+        if (productSubmitLockRef.current || isSavingProduct) return;
+
+        const trimmedName = String(productInput.name || '').trim();
+        const normalizedSku = String(productInput.skuCode || '').trim().toUpperCase();
+        const brandId = Number(productInput.brandId || 0);
+        const catL1 = Number(productInput.catL1 || 0);
+        const catL2 = Number(productInput.catL2 || 0);
+        const catL3 = Number(productInput.catL3 || 0);
+
+        if (!trimmedName || !brandId || !catL1 || !catL2 || !catL3 || !normalizedSku) {
             showToast("Mohon lengkapi data wajib produk (Nama, Brand, Kategori, Kode SKU).", "error");
             return;
         }
 
-        // --- CEK SKU KEMBAR (DUPLIKAT) ---
         const isDuplicateSKU = products.some(
             (p) =>
-                p.skuCode.toUpperCase() === productInput.skuCode.toUpperCase() &&
-                p.id !== editingProductId // Jangan cek produk itu sendiri jika sedang diedit
+                String(p.skuCode || '').toUpperCase() === normalizedSku &&
+                Number(p.id) !== Number(editingProductId || 0)
         );
-
         if (isDuplicateSKU) {
-            showToast(`Kode SKU "${productInput.skuCode.toUpperCase()}" sudah digunakan oleh produk lain! Harap gunakan kode unik.`, "error");
-            return; // Hentikan proses simpan
+            showToast(`Kode SKU "${normalizedSku}" sudah digunakan oleh produk lain! Harap gunakan kode unik.`, "error");
+            return;
         }
-        // ---------------------------------
 
-        const brandName = brands.find(b => b.id == productInput.brandId)?.name;
-        const cat1 = categories.find(c => c.id == productInput.catL1);
-        const cat2 = cat1?.subCategories.find(c => c.id == productInput.catL2);
-        const cat3 = cat2?.subSubCategories.find(c => c.id == productInput.catL3);
-        const categoryPath = `${cat1?.name} > ${cat2?.name} > ${cat3?.name}`;
+        const normalizedDynamicFields = Object.entries(productInput.dynamicFields || {}).reduce((acc, [key, value]) => {
+            const safeKey = String(key || '').trim();
+            if (!safeKey) return acc;
+            const safeValue = String(value ?? '').trim();
+            if (!safeValue) return acc;
+            acc[safeKey] = safeValue;
+            return acc;
+        }, {});
 
-        if (editingProductId) {
-            setProducts(products.map(p => p.id === editingProductId ? {
-                ...p,
-                name: productInput.name,
-                brandId: Number(productInput.brandId),
-                brandName,
-                description: productInput.description || '-',
-                categoryPath,
-                catL1: productInput.catL1,
-                catL2: productInput.catL2,
-                catL3: productInput.catL3,
-                skuCode: productInput.skuCode.toUpperCase(),
-                dynamicFields: productInput.dynamicFields || {} // Simpan data dinamis
-            } : p));
-            showToast("SKU Produk berhasil diperbarui!");
-        } else {
-            const newProduct = {
-                ...productInput,
-                id: Date.now(),
-                brandId: Number(productInput.brandId),
-                brandName,
-                description: productInput.description || '-',
-                categoryPath: categoryPath,
-                skuCode: productInput.skuCode.toUpperCase(),
-                dynamicFields: productInput.dynamicFields || {} // Simpan data dinamis
-            };
-            setProducts([...products, newProduct]);
-            showToast("SKU Produk baru berhasil ditambahkan!");
-        }
-        setProductInput({ name: '', brandId: '', description: '', catL1: '', catL2: '', catL3: '', skuCode: '', dynamicFields: {} });
-        setEditingProductId(null);
-        setActiveTab('product');
+        const basePayload = {
+            name: trimmedName,
+            sku_code: normalizedSku,
+            brand_id: brandId,
+            cat_l1_id: catL1,
+            cat_l2_id: catL2,
+            cat_l3_id: catL3,
+            description: String(productInput.description || '').trim(),
+            dynamic_fields: normalizedDynamicFields,
+        };
+
+        const isEditing = Boolean(editingProductId);
+        const targetUrl = isEditing ? `/products/update/${editingProductId}` : '/products';
+        const payload = productImageFile
+            ? (() => {
+                const formData = new FormData();
+                formData.append('name', basePayload.name);
+                formData.append('sku_code', basePayload.sku_code);
+                formData.append('brand_id', String(basePayload.brand_id));
+                formData.append('cat_l1_id', String(basePayload.cat_l1_id));
+                formData.append('cat_l2_id', String(basePayload.cat_l2_id));
+                formData.append('cat_l3_id', String(basePayload.cat_l3_id));
+                formData.append('description', basePayload.description);
+                formData.append('image', productImageFile);
+                formData.append('image_upload_expected', '1');
+
+                Object.entries(normalizedDynamicFields).forEach(([key, value]) => {
+                    formData.append(`dynamic_fields[${key}]`, String(value));
+                });
+
+                return formData;
+            })()
+            : basePayload;
+
+        productSubmitLockRef.current = true;
+        setIsSavingProduct(true);
+
+        axios.post(targetUrl, payload)
+            .then((response) => {
+                const savedProduct = normalizeProductRecord(response?.data?.product || {});
+                if (!savedProduct.id) {
+                    throw new Error('PRODUCT_RESPONSE_MISSING_ID');
+                }
+
+                if (isEditing) {
+                    setProducts((currentProducts) =>
+                        currentProducts.map((currentProduct) =>
+                            Number(currentProduct.id) === savedProduct.id ? savedProduct : currentProduct
+                        )
+                    );
+
+                    setSelectedProductDetail((currentDetail) =>
+                        currentDetail && Number(currentDetail.id) === savedProduct.id ? savedProduct : currentDetail
+                    );
+                } else {
+                    setProducts((currentProducts) => [savedProduct, ...currentProducts]);
+                }
+
+                showToast(isEditing ? "SKU Produk berhasil diperbarui!" : "SKU Produk baru berhasil ditambahkan!");
+                resetProductDraft();
+                setActiveTab('product');
+            })
+            .catch((error) => {
+                if (error?.message === 'PRODUCT_RESPONSE_MISSING_ID') {
+                    showToast("Respons server SKU produk tidak lengkap. Silakan coba lagi.", "error");
+                    return;
+                }
+
+                const errors = error?.response?.data?.errors || {};
+                showToast(getFirstErrorMessage(errors, "Gagal menyimpan SKU produk."), "error");
+            })
+            .finally(() => {
+                productSubmitLockRef.current = false;
+                setIsSavingProduct(false);
+            });
     };
 
     const handleEditProduct = (product) => {
         setProductInput({
+            ...createEmptyProductInput(),
             name: product.name,
-            brandId: product.brandId,
+            brandId: String(product.brandId || ''),
             description: product.description === "-" ? "" : product.description,
-            catL1: product.catL1,
-            catL2: product.catL2,
-            catL3: product.catL3,
+            catL1: String(product.catL1 || ''),
+            catL2: String(product.catL2 || ''),
+            catL3: String(product.catL3 || ''),
             skuCode: product.skuCode || '',
-            dynamicFields: product.dynamicFields || {} // Tarik data dinamis saat edit
+            dynamicFields: product.dynamicFields || {},
         });
-        setEditingProductId(product.id);
+        setProductImageFile(null);
+        setProductImagePreviewFromServer(product.image_url);
+        setEditingProductId(Number(product.id));
         setActiveTab('product_form');
     };
 
     const handleCancelEditProduct = () => {
-        setProductInput({ name: '', brandId: '', description: '', catL1: '', catL2: '', catL3: '', skuCode: '', dynamicFields: {} });
-        setEditingProductId(null);
+        if (isSavingProduct) return;
+        resetProductDraft();
         setActiveTab('product');
     };
 
@@ -879,8 +1000,29 @@ export default function AdminPanel({ databaseBrands, databaseCategories, databas
             title: "Hapus SKU Produk?",
             message: "Data produk ini akan dihapus dari sistem secara permanen. Lanjutkan?",
             onConfirm: () => {
-                setProducts(products.filter(p => p.id !== id));
-                showToast("SKU Produk berhasil dihapus!");
+                axios.delete(`/products/${id}`)
+                    .then((response) => {
+                        const deletedId = Number(response?.data?.deleted_id || id);
+
+                        setProducts((currentProducts) =>
+                            currentProducts.filter((currentProduct) => Number(currentProduct.id) !== deletedId)
+                        );
+
+                        if (Number(editingProductId || 0) === deletedId) {
+                            resetProductDraft();
+                            setActiveTab('product');
+                        }
+
+                        setSelectedProductDetail((currentDetail) =>
+                            currentDetail && Number(currentDetail.id) === deletedId ? null : currentDetail
+                        );
+
+                        showToast("SKU Produk berhasil dihapus!");
+                    })
+                    .catch((error) => {
+                        const errors = error?.response?.data?.errors || {};
+                        showToast(getFirstErrorMessage(errors, "Gagal menghapus SKU produk."), "error");
+                    });
             }
         });
     };
@@ -1498,10 +1640,16 @@ export default function AdminPanel({ databaseBrands, databaseCategories, databas
         savingBrandStatusId,
         isBrandModalOpen,
         setActiveTab,
+        openCreateProductForm,
+        createEmptyProductInput,
         handleCancelEditProduct,
         handleSaveProduct,
+        isSavingProduct,
         productInput,
         setProductInput,
+        productImagePreview,
+        setProductImageFile,
+        setProductImagePreviewFromFile,
         activeFormSection,
         setActiveFormSection,
         categories,
@@ -1573,6 +1721,7 @@ export default function AdminPanel({ databaseBrands, databaseCategories, databas
         setSelectedBatchDetail,
         markBrandLogoBroken,
         buildBrandLogoSrc,
+        buildProductImageUrl,
         brokenBrandLogoIds,
         logoPreview,
         selectedCatL1,

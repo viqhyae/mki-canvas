@@ -23,8 +23,12 @@ export default function createProductForm(context) {
         handleSaveProduct,
         isBrandActive,
         isCategoryModalOpen,
+        isSavingProduct,
         PRODUCT_SPEC_SCHEMA,
         productInput,
+        productImagePreview,
+        setProductImageFile,
+        setProductImagePreviewFromFile,
         setActiveFormSection,
         setCatSearchKeyword,
         setIsCategoryModalOpen,
@@ -108,9 +112,9 @@ export default function createProductForm(context) {
 
                         {/* Buttons Action */}
                         <div className="flex items-center gap-3 w-full sm:w-auto pb-3">
-                            <button type="button" onClick={handleCancelEditProduct} className="flex-1 sm:flex-none px-5 py-2.5 rounded-xl font-bold text-slate-600 bg-white border border-slate-200 hover:bg-slate-50 transition-all active:scale-95 text-sm hidden sm:block">Batal</button>
-                            <button onClick={handleSaveProduct} className="flex-1 sm:flex-none px-5 py-2.5 rounded-xl font-bold text-white bg-[#C1986E] hover:bg-[#A37E58] transition-all shadow-md active:scale-95 text-sm flex items-center justify-center gap-2">
-                                <Package size={16} /> Simpan
+                            <button type="button" onClick={handleCancelEditProduct} disabled={isSavingProduct} className="flex-1 sm:flex-none px-5 py-2.5 rounded-xl font-bold text-slate-600 bg-white border border-slate-200 hover:bg-slate-50 transition-all active:scale-95 text-sm hidden sm:block disabled:opacity-50 disabled:cursor-not-allowed">Batal</button>
+                            <button onClick={handleSaveProduct} disabled={isSavingProduct} className="flex-1 sm:flex-none px-5 py-2.5 rounded-xl font-bold text-white bg-[#C1986E] hover:bg-[#A37E58] transition-all shadow-md active:scale-95 text-sm flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed">
+                                <Package size={16} /> {isSavingProduct ? 'Menyimpan...' : 'Simpan'}
                             </button>
                         </div>
 
@@ -131,12 +135,32 @@ export default function createProductForm(context) {
                             <div className="flex flex-col md:flex-row gap-8 items-start">
                                 {/* Kiri: Upload Gambar (Rasio 1:1) */}
                                 <div className="w-full md:w-56 flex-shrink-0 space-y-2">
-                                    <div className="w-full aspect-square border-2 border-dashed border-slate-200 rounded-2xl flex flex-col items-center justify-center text-slate-400 cursor-pointer hover:bg-slate-50 hover:border-[#C1986E] transition-all group bg-slate-50/50 p-4 text-center relative overflow-hidden">
-                                        <div className="bg-white p-4 rounded-full shadow-sm mb-3 group-hover:scale-110 group-hover:shadow-md transition-all duration-300">
-                                            <UploadCloud size={28} className="text-slate-400 group-hover:text-[#C1986E]" />
-                                        </div>
-                                        <span className="text-xs font-bold text-slate-600 mb-1">Pilih / Tarik Foto</span>
-                                    </div>
+                                    <label className="w-full aspect-square border-2 border-dashed border-slate-200 rounded-2xl flex flex-col items-center justify-center text-slate-400 cursor-pointer hover:bg-slate-50 hover:border-[#C1986E] transition-all group bg-slate-50/50 p-4 text-center relative overflow-hidden">
+                                        <input
+                                            type="file"
+                                            className="hidden"
+                                            accept="image/*"
+                                            disabled={isSavingProduct}
+                                            onChange={(event) => {
+                                                const file = event.target.files?.[0];
+                                                if (!file) return;
+
+                                                setProductImageFile(file);
+                                                setProductImagePreviewFromFile(file);
+                                            }}
+                                        />
+
+                                        {productImagePreview ? (
+                                            <img src={productImagePreview} alt="Preview produk" className="absolute inset-0 h-full w-full object-cover" />
+                                        ) : (
+                                            <>
+                                                <div className="bg-white p-4 rounded-full shadow-sm mb-3 group-hover:scale-110 group-hover:shadow-md transition-all duration-300">
+                                                    <UploadCloud size={28} className="text-slate-400 group-hover:text-[#C1986E]" />
+                                                </div>
+                                                <span className="text-xs font-bold text-slate-600 mb-1">Pilih / Tarik Foto</span>
+                                            </>
+                                        )}
+                                    </label>
                                     <div className="text-[10px] text-slate-400 text-center leading-relaxed">
                                         Format: JPG, PNG, WEBP<br />Ukuran Maksimal: 2MB<br />Rasio Gambar: 1:1 (Persegi)
                                     </div>

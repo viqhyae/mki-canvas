@@ -4,6 +4,7 @@ use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\BrandController;
 use App\Http\Controllers\CategoryController;
 use App\Http\Controllers\ProductVerificationController;
+use App\Http\Controllers\ProductSkuController;
 use App\Http\Controllers\TagBatchController;
 use App\Http\Controllers\UserManagementController;
 use Illuminate\Support\Facades\Route;
@@ -38,6 +39,11 @@ Route::middleware('auth')->group(function () {
     // Rute API untuk Kategori Produk (3 level)
     Route::post('/product-categories', [CategoryController::class, 'store'])->name('product-categories.store');
     Route::delete('/product-categories/{productCategory}', [CategoryController::class, 'destroy'])->name('product-categories.destroy');
+
+    // Rute API untuk SKU Produk
+    Route::post('/products', [ProductSkuController::class, 'store'])->name('products.store');
+    Route::post('/products/update/{productSku}', [ProductSkuController::class, 'update'])->name('products.update');
+    Route::delete('/products/{productSku}', [ProductSkuController::class, 'destroy'])->name('products.destroy');
 
     // Rute API untuk Users & Roles
     Route::post('/users', [UserManagementController::class, 'store'])->name('users.store');
