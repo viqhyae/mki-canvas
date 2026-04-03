@@ -3,20 +3,23 @@
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\BrandController;
 use App\Http\Controllers\CategoryController;
+use App\Http\Controllers\ProductVerificationController;
 use App\Http\Controllers\TagBatchController;
 use App\Http\Controllers\UserManagementController;
-use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
+use Inertia\Inertia;
 
-// Halaman depan: arahkan ke login sebelum dashboard
+// Halaman depan website publik
 Route::get('/', function () {
-    return Auth::check()
-        ? redirect()->route('dashboard')
-        : redirect()->route('login');
-});
+    return Inertia::render('Welcome');
+})->name('home');
+
+// Endpoint publik untuk cek keaslian kode produk
+Route::get('/verify-product-code', [ProductVerificationController::class, 'check'])
+    ->name('public.verify-code');
 
 // Perubahan di sini: Rute dashboard sekarang memanggil fungsi 'index' di BrandController
-Route::get('adminmki', [BrandController::class, 'index'])
+Route::get('/adminmki', [BrandController::class, 'index'])
     ->middleware(['auth', 'verified'])
     ->name('dashboard');
 
