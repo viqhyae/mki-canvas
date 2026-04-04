@@ -2,12 +2,17 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\AppSetting;
 use App\Models\ScanActivity;
 use App\Models\TagCode;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Http;
 
 class ProductVerificationController extends Controller
 {
+    private const DEFAULT_MAX_VALID_SCAN_LIMIT = 5;
+
     public function check(Request $request)
     {
         $validated = $request->validate([
@@ -37,14 +42,19 @@ class ProductVerificationController extends Controller
             )
             ->count() + 1;
 
+        $maxValidScanLimit = $this->getMaxValidScanLimit();
+
         $resultStatus = $tagCode
-            ? $this->determineResultStatus((string) ($tagCode->status ?? 'Aktif'), $scanCount)
+            ? $this->determineResultStatus((string) ($tagCode->status ?? 'Aktif'), $scanCount, $maxValidScanLimit)
             : 'Invalid';
+
+        $resolvedIpAddress = $this->resolveClientIpAddress($request);
 
         $locationLabel = $this->resolveLocationLabel(
             $validated['location_label'] ?? null,
             $validated['latitude'] ?? null,
-            $validated['longitude'] ?? null
+            $validated['longitude'] ?? null,
+            $resolvedIpAddress
         );
 
         ScanActivity::query()->create([
@@ -59,7 +69,7 @@ class ProductVerificationController extends Controller
             'location_label' => $locationLabel,
             'latitude' => $validated['latitude'] ?? null,
             'longitude' => $validated['longitude'] ?? null,
-            'ip_address' => $request->ip(),
+            'ip_address' => $resolvedIpAddress ?: $request->ip(),
             'user_agent' => $request->userAgent(),
             'scanned_at' => now(),
         ]);
@@ -70,6 +80,7 @@ class ProductVerificationController extends Controller
                 'code' => $normalizedCode,
                 'scan_status' => $resultStatus,
                 'scan_count' => $scanCount,
+                'max_valid_scan_limit' => $maxValidScanLimit,
                 'message' => 'Kode tidak ditemukan di database.',
             ]);
         }
@@ -82,28 +93,44 @@ class ProductVerificationController extends Controller
             'status' => $tagCode->status,
             'scan_status' => $resultStatus,
             'scan_count' => $scanCount,
+            'max_valid_scan_limit' => $maxValidScanLimit,
             'message' => 'Kode terdaftar.',
         ]);
     }
 
-    private function determineResultStatus(string $tagStatus, int $scanCount): string
+    private function determineResultStatus(string $tagStatus, int $scanCount, int $maxValidScanLimit): string
     {
         if (strtolower(trim($tagStatus)) === 'suspended') {
             return 'Suspended';
         }
 
-        if ($scanCount <= 1) {
+        if ($scanCount <= $maxValidScanLimit) {
             return 'Original';
         }
 
-        if ($scanCount <= 3) {
-            return 'Peringatan';
-        }
-
-        return 'Indikasi Palsu';
+        return 'Peringatan';
     }
 
-    private function resolveLocationLabel(?string $locationLabel, mixed $latitude, mixed $longitude): string
+    private function getMaxValidScanLimit(): int
+    {
+        if (!\Illuminate\Support\Facades\Schema::hasTable('app_settings')) {
+            return self::DEFAULT_MAX_VALID_SCAN_LIMIT;
+        }
+
+        return Cache::remember('security.max_valid_scan_limit', now()->addMinutes(10), function () {
+            $storedValue = AppSetting::getValue('max_valid_scan_limit');
+            $parsedValue = (int) ($storedValue ?? self::DEFAULT_MAX_VALID_SCAN_LIMIT);
+
+            return $parsedValue > 0 ? $parsedValue : self::DEFAULT_MAX_VALID_SCAN_LIMIT;
+        });
+    }
+
+    private function resolveLocationLabel(
+        ?string $locationLabel,
+        mixed $latitude,
+        mixed $longitude,
+        ?string $requestIp
+    ): string
     {
         $label = trim((string) ($locationLabel ?? ''));
         if ($label !== '') {
@@ -116,6 +143,170 @@ class ProductVerificationController extends Controller
             return "Lat {$lat}, Lng {$lng}";
         }
 
+        $labelFromIp = $this->resolveLocationFromIp($requestIp);
+        if ($labelFromIp !== null) {
+            return $labelFromIp;
+        }
+
         return 'Tidak Diketahui';
+    }
+
+    private function resolveLocationFromIp(?string $requestIp): ?string
+    {
+        if (app()->environment('testing')) {
+            return null;
+        }
+
+        $candidateIps = [];
+        $clientIp = trim((string) ($requestIp ?? ''));
+
+        if ($clientIp !== '' && $this->isPublicIp($clientIp)) {
+            $candidateIps[] = $clientIp;
+        }
+
+        // Fallback to server public IP lookup when client IP is private/reserved (e.g. localhost/dev).
+        $candidateIps[] = null;
+
+        foreach ($candidateIps as $ip) {
+            $cacheKey = 'ip_api_location_' . ($ip ?? 'self');
+            $cachedValue = Cache::get($cacheKey);
+            if (is_string($cachedValue) && $cachedValue !== '') {
+                return $cachedValue;
+            }
+
+            $resolvedLabel = $this->fetchLocationLabelFromIpApi($ip);
+            if ($resolvedLabel === null) {
+                continue;
+            }
+
+            Cache::put($cacheKey, $resolvedLabel, now()->addHours(6));
+            return $resolvedLabel;
+        }
+
+        return null;
+    }
+
+    private function resolveClientIpAddress(Request $request): ?string
+    {
+        $requestIp = trim((string) $request->ip());
+        if ($this->isPublicIp($requestIp)) {
+            return $requestIp;
+        }
+
+        if (app()->environment('testing')) {
+            return $requestIp !== '' ? $requestIp : null;
+        }
+
+        $forwardedIp = $this->firstPublicIpFromForwardedHeaders($request);
+        if ($forwardedIp !== null) {
+            return $forwardedIp;
+        }
+
+        $publicIpFromApi = $this->resolvePublicIpFromIpApi();
+        if ($publicIpFromApi !== null) {
+            return $publicIpFromApi;
+        }
+
+        return $requestIp !== '' ? $requestIp : null;
+    }
+
+    private function firstPublicIpFromForwardedHeaders(Request $request): ?string
+    {
+        $headerValues = [
+            $request->header('X-Forwarded-For'),
+            $request->header('CF-Connecting-IP'),
+            $request->header('X-Real-IP'),
+        ];
+
+        foreach ($headerValues as $headerValue) {
+            $parts = explode(',', (string) $headerValue);
+            foreach ($parts as $part) {
+                $candidate = trim($part);
+                if ($candidate === '') {
+                    continue;
+                }
+
+                if ($this->isPublicIp($candidate)) {
+                    return $candidate;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private function resolvePublicIpFromIpApi(): ?string
+    {
+        $cachedValue = Cache::get('ip_api_public_ip_self');
+        if (is_string($cachedValue) && $cachedValue !== '') {
+            return $cachedValue;
+        }
+
+        $payload = $this->fetchIpApiPayload(null, 'status,message,query');
+        if ($payload === null || ($payload['status'] ?? '') !== 'success') {
+            return null;
+        }
+
+        $resolvedQueryIp = trim((string) ($payload['query'] ?? ''));
+        if (!$this->isPublicIp($resolvedQueryIp)) {
+            return null;
+        }
+
+        Cache::put('ip_api_public_ip_self', $resolvedQueryIp, now()->addHours(6));
+        return $resolvedQueryIp;
+    }
+
+    private function fetchLocationLabelFromIpApi(?string $ip): ?string
+    {
+        $payload = $this->fetchIpApiPayload($ip, 'status,message,city,regionName,countryCode');
+        if ($payload === null || ($payload['status'] ?? '') !== 'success') {
+            return null;
+        }
+
+        $city = trim((string) ($payload['city'] ?? $payload['regionName'] ?? ''));
+        $countryCode = strtoupper(trim((string) ($payload['countryCode'] ?? '')));
+
+        if ($city !== '' && $countryCode !== '') {
+            return "{$city},{$countryCode}";
+        }
+
+        if ($city !== '') {
+            return $city;
+        }
+
+        if ($countryCode !== '') {
+            return $countryCode;
+        }
+
+        return null;
+    }
+
+    private function fetchIpApiPayload(?string $ip, string $fields): ?array
+    {
+        $endpoint = $ip !== null && $ip !== ''
+            ? 'http://ip-api.com/json/' . urlencode($ip)
+            : 'http://ip-api.com/json/';
+
+        try {
+            $response = Http::timeout(2)
+                ->acceptJson()
+                ->get($endpoint, [
+                    'fields' => $fields,
+                ]);
+        } catch (\Throwable) {
+            return null;
+        }
+
+        if (!$response->ok()) {
+            return null;
+        }
+
+        $payload = $response->json();
+        return is_array($payload) ? $payload : null;
+    }
+
+    private function isPublicIp(string $ip): bool
+    {
+        return filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) !== false;
     }
 }

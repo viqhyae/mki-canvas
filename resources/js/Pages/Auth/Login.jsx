@@ -6,7 +6,7 @@ import { Head, useForm } from '@inertiajs/react';
 
 export default function Login({ status }) {
     const { data, setData, post, processing, errors, reset } = useForm({
-        login: '',
+        email: '',
         password: '',
         remember: false,
     });
@@ -48,25 +48,25 @@ export default function Login({ status }) {
 
                             <div className="mb-6">
                                 <h2 className="text-2xl font-bold text-slate-800">Masuk ke Dashboard</h2>
-                                <p className="mt-1 text-sm text-slate-500">Gunakan username atau email dan password Anda.</p>
+                                <p className="mt-1 text-sm text-slate-500">Gunakan email dan password Anda.</p>
                             </div>
 
                             <form onSubmit={submit} className="space-y-4">
                                 <div>
-                                    <InputLabel htmlFor="login" value="Username / Email" className="text-slate-700" />
+                                    <InputLabel htmlFor="email" value="Email" className="text-slate-700" />
 
                                     <TextInput
-                                        id="login"
-                                        type="text"
-                                        name="login"
-                                        value={data.login}
+                                        id="email"
+                                        type="email"
+                                        name="email"
+                                        value={data.email}
                                         className="mt-2 block w-full rounded-full border-slate-300 px-4 py-3 shadow-none focus:border-[#C1986E] focus:ring-[#C1986E]"
                                         autoComplete="username"
                                         isFocused={true}
-                                        onChange={(e) => setData('login', e.target.value)}
+                                        onChange={(e) => setData('email', e.target.value)}
                                     />
 
-                                    <InputError message={errors.login} className="mt-2" />
+                                    <InputError message={errors.email} className="mt-2" />
                                 </div>
 
                                 <div>

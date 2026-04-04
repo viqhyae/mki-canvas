@@ -2,13 +2,26 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Brand;
 use App\Models\ScanActivity;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Schema;
 
 class ScanActivityController extends Controller
 {
     public function index()
     {
-        $logs = ScanActivity::query()
+        $query = ScanActivity::query();
+        if ($this->isBrandOwner()) {
+            $ownedBrandNames = $this->ownedBrandNamesForCurrentUser();
+            if ($ownedBrandNames === []) {
+                $query->whereRaw('1 = 0');
+            } else {
+                $query->whereIn('brand_name', $ownedBrandNames);
+            }
+        }
+
+        $logs = $query
             ->latest('id')
             ->limit(500)
             ->get()
@@ -38,5 +51,27 @@ class ScanActivityController extends Controller
             'latitude' => $scanActivity->latitude,
             'longitude' => $scanActivity->longitude,
         ];
+    }
+
+    private function isBrandOwner(): bool
+    {
+        return trim((string) (Auth::user()?->role ?? '')) === 'Brand Owner';
+    }
+
+    private function ownedBrandNamesForCurrentUser(): array
+    {
+        $userName = trim((string) (Auth::user()?->name ?? ''));
+        if ($userName === '' || !Schema::hasTable('brands')) {
+            return [];
+        }
+
+        return Brand::query()
+            ->where('owner_name', $userName)
+            ->pluck('name')
+            ->map(fn ($name) => trim((string) $name))
+            ->filter(fn ($name) => $name !== '')
+            ->unique()
+            ->values()
+            ->all();
     }
 }

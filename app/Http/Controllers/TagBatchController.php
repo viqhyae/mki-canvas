@@ -2,12 +2,14 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Brand;
 use App\Models\TagBatch;
 use App\Models\TagCode;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 
@@ -15,6 +17,8 @@ class TagBatchController extends Controller
 {
     public function store(Request $request)
     {
+        $this->ensureSuperAdminAccess($request);
+
         $validated = $request->validate([
             'product_name' => 'required|string|max:255',
             'brand_name' => 'nullable|string|max:255',
@@ -102,6 +106,8 @@ class TagBatchController extends Controller
 
     public function updateStatus(Request $request, TagBatch $tagBatch)
     {
+        $this->ensureSuperAdminAccess($request);
+
         $validated = $request->validate([
             'status' => ['required', 'string', Rule::in(['Generated', 'Suspended'])],
         ]);
@@ -126,8 +132,10 @@ class TagBatchController extends Controller
         ]);
     }
 
-    public function destroy(TagBatch $tagBatch)
+    public function destroy(Request $request, TagBatch $tagBatch)
     {
+        $this->ensureSuperAdminAccess($request);
+
         $deletedId = $tagBatch->batch_code;
         $tagBatch->delete();
 
@@ -138,6 +146,8 @@ class TagBatchController extends Controller
 
     public function codes(TagBatch $tagBatch)
     {
+        $this->ensureBatchReadableByCurrentUser($tagBatch);
+
         $codes = $tagBatch->codes()
             ->orderBy('id')
             ->get()
@@ -231,5 +241,53 @@ class TagBatchController extends Controller
             'pin' => $tagCode->pin,
             'ecc' => $tagCode->error_correction,
         ];
+    }
+
+    private function ensureSuperAdminAccess(Request $request): void
+    {
+        $role = trim((string) ($request->user()?->role ?? ''));
+        if ($role === 'Super Admin') {
+            return;
+        }
+
+        abort(403, 'Akses ditolak. Fitur ini hanya untuk Super Admin.');
+    }
+
+    private function ensureBatchReadableByCurrentUser(TagBatch $tagBatch): void
+    {
+        $user = Auth::user();
+        $role = trim((string) ($user?->role ?? ''));
+
+        if ($role === 'Super Admin') {
+            return;
+        }
+
+        if ($role !== 'Brand Owner') {
+            abort(403, 'Akses ditolak.');
+        }
+
+        $ownedBrandNames = $this->ownedBrandNamesForCurrentUser();
+        $batchBrandName = trim((string) ($tagBatch->brand_name ?? ''));
+
+        if ($batchBrandName === '' || !in_array($batchBrandName, $ownedBrandNames, true)) {
+            abort(403, 'Anda tidak memiliki akses ke batch ini.');
+        }
+    }
+
+    private function ownedBrandNamesForCurrentUser(): array
+    {
+        $userName = trim((string) (Auth::user()?->name ?? ''));
+        if ($userName === '' || !Schema::hasTable('brands')) {
+            return [];
+        }
+
+        return Brand::query()
+            ->where('owner_name', $userName)
+            ->pluck('name')
+            ->map(fn ($name) => trim((string) $name))
+            ->filter(fn ($name) => $name !== '')
+            ->unique()
+            ->values()
+            ->all();
     }
 }

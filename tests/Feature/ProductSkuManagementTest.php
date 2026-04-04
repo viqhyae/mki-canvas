@@ -14,9 +14,12 @@ class ProductSkuManagementTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_authenticated_user_can_create_product_sku(): void
+    public function test_super_admin_can_create_product_sku(): void
     {
-        $user = User::factory()->create();
+        $user = User::factory()->create([
+            'role' => 'Super Admin',
+            'status' => 1,
+        ]);
         $this->actingAs($user);
 
         $brand = Brand::query()->create([
@@ -62,9 +65,12 @@ class ProductSkuManagementTest extends TestCase
         ]);
     }
 
-    public function test_authenticated_user_can_update_and_delete_product_sku(): void
+    public function test_super_admin_can_update_and_delete_product_sku(): void
     {
-        $user = User::factory()->create();
+        $user = User::factory()->create([
+            'role' => 'Super Admin',
+            'status' => 1,
+        ]);
         $this->actingAs($user);
 
         $brandA = Brand::query()->create([

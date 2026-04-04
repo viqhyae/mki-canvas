@@ -4,6 +4,7 @@ import {
     CheckCircle2,
     Database,
     Download,
+    Eye,
     Filter,
     Hash,
     Info,
@@ -28,6 +29,7 @@ export default function createTagGenerator(context) {
         globalSearch,
         handleGenerateTags,
         handleSortChange,
+        isBrandOwnerRole,
         isBatchPendingAction,
         isSameEntityId,
         isSavingBatch,
@@ -40,6 +42,8 @@ export default function createTagGenerator(context) {
         setBatchSort,
         setConfirmObj,
         setIsTagModalOpen,
+        selectedBatchDetail,
+        setSelectedBatchDetail,
         setTagConfig,
         showToast,
         SortIcon,
@@ -257,12 +261,13 @@ export default function createTagGenerator(context) {
 
         return (
             <div className="space-y-6 animate-in fade-in duration-500">
-                <PageAlert text="Gunakan fitur ini untuk membuat batch Tag QR secara massal berbasis database. Saat ini mode yang aktif adalah kode verifikasi tanpa PIN." />
-                <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
-                    <h3 className="font-semibold text-slate-800 mb-6 flex items-center gap-2">
-                        <QrCode size={18} className="text-[#C1986E]" /> Konfigurasi Batch Baru
-                    </h3>
-                    <form onSubmit={handleGenerateTags} className="space-y-6">
+                <PageAlert text={isBrandOwnerRole ? "Mode Brand Owner: Anda hanya dapat melihat riwayat batch Tag/QR Code milik brand Anda." : "Gunakan fitur ini untuk membuat batch Tag QR secara massal berbasis database. Saat ini mode yang aktif adalah kode verifikasi tanpa PIN."} />
+                {!isBrandOwnerRole && (
+                    <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
+                        <h3 className="font-semibold text-slate-800 mb-6 flex items-center gap-2">
+                            <QrCode size={18} className="text-[#C1986E]" /> Konfigurasi Batch Baru
+                        </h3>
+                        <form onSubmit={handleGenerateTags} className="space-y-6">
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                             <div className="space-y-1.5">
                                 <label className="text-xs font-semibold text-slate-500 uppercase">Pilih Produk (SKU)</label>
@@ -305,13 +310,14 @@ export default function createTagGenerator(context) {
                                 </div>
                             </div>
                         </div>
-                        <div className="flex justify-end pt-4 border-t border-slate-100">
-                            <button type="submit" disabled={isSavingBatch} className="bg-[#C1986E] hover:bg-[#A37E58] text-white px-8 py-2.5 rounded-lg font-medium transition-all active:scale-95 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
-                                <Hash size={18} /> Generate Batch Sekarang
-                            </button>
-                        </div>
-                    </form>
-                </div>
+                            <div className="flex justify-end pt-4 border-t border-slate-100">
+                                <button type="submit" disabled={isSavingBatch} className="bg-[#C1986E] hover:bg-[#A37E58] text-white px-8 py-2.5 rounded-lg font-medium transition-all active:scale-95 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
+                                    <Hash size={18} /> Generate Batch Sekarang
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                )}
 
                 {/* TABEL RIWAYAT BATCH */}
                 <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-x-auto mt-6">
@@ -384,25 +390,38 @@ export default function createTagGenerator(context) {
                                         </td>
                                         <td className="px-6 py-4 text-center">
                                             <div className="flex items-center justify-center gap-2">
-                                                <Tooltip text={batch.status === 'Generated' ? "Suspend / Recall Batch" : "Aktifkan Kembali Batch"} position="top">
-                                                    <button
-                                                        disabled={isPending}
-                                                        onClick={() => handleToggleBatchStatus(batch.id, batch.status)}
-                                                        className={`p-1.5 rounded-lg transition-all active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed ${batch.status === 'Generated' ? 'text-slate-400 hover:text-orange-600 hover:bg-orange-50' : 'text-red-500 hover:text-emerald-600 hover:bg-emerald-50'}`}
-                                                    >
-                                                        <AlertCircle size={16} />
-                                                    </button>
-                                                </Tooltip>
-                                                <Tooltip text="Download PDF" position="top">
-                                                    <button onClick={() => handleDownloadBatchPdf(batch.id)} className="text-slate-400 hover:text-blue-500 hover:bg-blue-50 transition-all p-1.5 rounded-lg active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed" disabled={batch.status === 'Suspended' || isPending}>
-                                                        <Download size={16} />
-                                                    </button>
-                                                </Tooltip>
-                                                <Tooltip text="Hapus Seluruh Batch" position="top">
-                                                    <button disabled={isPending} onClick={() => handleDeleteBatch(batch.id)} className="text-slate-400 hover:text-red-500 hover:bg-red-50 transition-all p-1.5 rounded-lg active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed">
-                                                        <Trash2 size={16} />
-                                                    </button>
-                                                </Tooltip>
+                                                {isBrandOwnerRole ? (
+                                                    <Tooltip text="Preview Batch" position="top">
+                                                        <button
+                                                            onClick={() => setSelectedBatchDetail(batch)}
+                                                            className="text-slate-400 hover:text-blue-500 hover:bg-blue-50 transition-all p-1.5 rounded-lg active:scale-95"
+                                                        >
+                                                            <Eye size={16} />
+                                                        </button>
+                                                    </Tooltip>
+                                                ) : (
+                                                    <>
+                                                        <Tooltip text={batch.status === 'Generated' ? "Suspend / Recall Batch" : "Aktifkan Kembali Batch"} position="top">
+                                                            <button
+                                                                disabled={isPending}
+                                                                onClick={() => handleToggleBatchStatus(batch.id, batch.status)}
+                                                                className={`p-1.5 rounded-lg transition-all active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed ${batch.status === 'Generated' ? 'text-slate-400 hover:text-orange-600 hover:bg-orange-50' : 'text-red-500 hover:text-emerald-600 hover:bg-emerald-50'}`}
+                                                            >
+                                                                <AlertCircle size={16} />
+                                                            </button>
+                                                        </Tooltip>
+                                                        <Tooltip text="Download PDF" position="top">
+                                                            <button onClick={() => handleDownloadBatchPdf(batch.id)} className="text-slate-400 hover:text-blue-500 hover:bg-blue-50 transition-all p-1.5 rounded-lg active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed" disabled={batch.status === 'Suspended' || isPending}>
+                                                                <Download size={16} />
+                                                            </button>
+                                                        </Tooltip>
+                                                        <Tooltip text="Hapus Seluruh Batch" position="top">
+                                                            <button disabled={isPending} onClick={() => handleDeleteBatch(batch.id)} className="text-slate-400 hover:text-red-500 hover:bg-red-50 transition-all p-1.5 rounded-lg active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed">
+                                                                <Trash2 size={16} />
+                                                            </button>
+                                                        </Tooltip>
+                                                    </>
+                                                )}
                                             </div>
                                         </td>
                                     </tr>
@@ -411,6 +430,64 @@ export default function createTagGenerator(context) {
                         </tbody>
                     </table>
                 </div>
+
+                {selectedBatchDetail && (
+                    <div
+                        className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
+                        onClick={() => setSelectedBatchDetail(null)}
+                    >
+                        <div
+                            className="bg-white rounded-2xl shadow-xl w-full max-w-xl overflow-hidden animate-in zoom-in-95 duration-200 flex flex-col"
+                            onClick={(event) => event.stopPropagation()}
+                        >
+                            <div className="bg-slate-50 border-b border-slate-100 p-4 px-6 flex justify-between items-center">
+                                <h3 className="font-bold text-slate-800 flex items-center gap-2">
+                                    <Eye size={18} className="text-[#C1986E]" /> Preview Batch
+                                </h3>
+                                <button onClick={() => setSelectedBatchDetail(null)} className="text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-all p-1.5 rounded-lg active:scale-95">
+                                    <X size={18} />
+                                </button>
+                            </div>
+                            <div className="p-6 space-y-4 text-sm">
+                                <div>
+                                    <p className="text-xs uppercase tracking-wide text-slate-400 font-bold mb-1">Batch ID</p>
+                                    <p className="font-mono text-slate-800">{selectedBatchDetail.id}</p>
+                                </div>
+                                <div>
+                                    <p className="text-xs uppercase tracking-wide text-slate-400 font-bold mb-1">Produk</p>
+                                    <p className="text-slate-800">{selectedBatchDetail.productName}</p>
+                                </div>
+                                <div>
+                                    <p className="text-xs uppercase tracking-wide text-slate-400 font-bold mb-1">Brand</p>
+                                    <p className="text-slate-700">{selectedBatchDetail.brandName || '-'}</p>
+                                </div>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <p className="text-xs uppercase tracking-wide text-slate-400 font-bold mb-1">Jumlah Tag</p>
+                                        <p className="text-slate-800">{new Intl.NumberFormat('id-ID').format(Number(selectedBatchDetail.qty || 0))}</p>
+                                    </div>
+                                    <div>
+                                        <p className="text-xs uppercase tracking-wide text-slate-400 font-bold mb-1">Status</p>
+                                        <p className="text-slate-800">{selectedBatchDetail.status}</p>
+                                    </div>
+                                </div>
+                                <div>
+                                    <p className="text-xs uppercase tracking-wide text-slate-400 font-bold mb-1">Rentang Kode</p>
+                                    <p className="text-slate-700 font-mono text-xs break-all">{selectedBatchDetail.firstCode || '-'} - {selectedBatchDetail.lastCode || '-'}</p>
+                                </div>
+                                <div>
+                                    <p className="text-xs uppercase tracking-wide text-slate-400 font-bold mb-1">Tanggal Batch</p>
+                                    <p className="text-slate-700">{selectedBatchDetail.date || '-'}</p>
+                                </div>
+                            </div>
+                            <div className="bg-slate-50 border-t border-slate-100 p-4 px-6 flex justify-end">
+                                <button onClick={() => setSelectedBatchDetail(null)} className="px-6 py-2.5 rounded-lg font-medium text-white bg-slate-800 hover:bg-slate-700 transition-all active:scale-95 text-sm">
+                                    Tutup
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
 
                 {/* Modal Berhasil Generate */}
                 {isTagModalOpen && generatedQR && (

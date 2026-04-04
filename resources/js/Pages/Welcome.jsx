@@ -15,15 +15,27 @@ export default function Welcome() {
     const formatCoordinateLabel = (latitude, longitude) =>
         `Lat ${latitude.toFixed(5)}, Lng ${longitude.toFixed(5)}`;
 
-    const getTimezoneCityLabel = () => {
-        const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
-        if (!timezone.includes('/')) {
-            return '';
+    const buildCityCountryLabel = (payload) => {
+        const cityCandidates = [
+            payload?.city,
+            payload?.locality,
+            payload?.localityInfo?.administrative?.find((item) => item?.order === 3)?.name,
+            payload?.localityInfo?.administrative?.find((item) => item?.order === 2)?.name,
+            payload?.principalSubdivision,
+        ];
+
+        const city = cityCandidates.map(toCleanLabel).find((item) => item !== '') || '';
+        const countryCode = toCleanLabel(payload?.countryCode).toUpperCase();
+
+        if (city !== '' && countryCode !== '') {
+            return `${city},${countryCode}`;
         }
 
-        const timezoneParts = timezone.split('/');
-        const lastPart = timezoneParts[timezoneParts.length - 1] || '';
-        return toCleanLabel(lastPart.replaceAll('_', ' '));
+        if (city !== '') {
+            return city;
+        }
+
+        return '';
     };
 
     const fetchCityFromCoordinates = async (latitude, longitude) => {
@@ -46,15 +58,7 @@ export default function Welcome() {
             }
 
             const payload = await response.json();
-            const cityCandidates = [
-                payload?.city,
-                payload?.locality,
-                payload?.localityInfo?.administrative?.find((item) => item?.order === 3)?.name,
-                payload?.localityInfo?.administrative?.find((item) => item?.order === 2)?.name,
-                payload?.principalSubdivision,
-            ];
-
-            return cityCandidates.map(toCleanLabel).find((item) => item !== '') || '';
+            return buildCityCountryLabel(payload);
         } catch {
             return '';
         } finally {
@@ -63,11 +67,8 @@ export default function Welcome() {
     };
 
     const getCheckerLocationPayload = async () => {
-        const timezoneCity = getTimezoneCityLabel();
-        const fallback = timezoneCity !== '' ? { location_label: timezoneCity } : {};
-
         if (typeof window === 'undefined' || !navigator?.geolocation) {
-            return fallback;
+            return {};
         }
 
         try {
@@ -83,10 +84,10 @@ export default function Welcome() {
             const longitude = Number(position.coords.longitude);
 
             if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
-                return fallback;
+                return {};
             }
             const cityLabel = await fetchCityFromCoordinates(latitude, longitude);
-            const locationLabel = toCleanLabel(cityLabel) || fallback.location_label || formatCoordinateLabel(latitude, longitude);
+            const locationLabel = toCleanLabel(cityLabel) || formatCoordinateLabel(latitude, longitude);
 
             return {
                 location_label: locationLabel,
@@ -94,7 +95,7 @@ export default function Welcome() {
                 longitude,
             };
         } catch {
-            return fallback;
+            return {};
         }
     };
 

@@ -1,11 +1,13 @@
 <?php
 
+use App\Http\Controllers\AccountSettingController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\BrandController;
 use App\Http\Controllers\CategoryController;
 use App\Http\Controllers\ProductVerificationController;
 use App\Http\Controllers\ProductSkuController;
 use App\Http\Controllers\ScanActivityController;
+use App\Http\Controllers\SecuritySettingController;
 use App\Http\Controllers\TagBatchController;
 use App\Http\Controllers\UserManagementController;
 use Illuminate\Support\Facades\Route;
@@ -61,6 +63,13 @@ Route::middleware('auth')->group(function () {
 
     // Rute API untuk aktivitas scan
     Route::get('/scan-activities', [ScanActivityController::class, 'index'])->name('scan-activities.index');
+
+    // Rute API untuk pengaturan keamanan
+    Route::post('/settings/security', [SecuritySettingController::class, 'update'])->name('settings.security.update');
+
+    // Rute API untuk pengaturan akun pribadi
+    Route::post('/settings/account/email', [AccountSettingController::class, 'updateEmail'])->name('settings.account.email');
+    Route::post('/settings/account/password', [AccountSettingController::class, 'updatePassword'])->name('settings.account.password');
 });
 
 require __DIR__ . '/auth.php';

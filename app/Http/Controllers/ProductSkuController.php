@@ -2,13 +2,16 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Brand;
 use App\Models\ProductCategory;
 use App\Models\ProductSku;
 use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
@@ -18,6 +21,7 @@ class ProductSkuController extends Controller
     public function store(Request $request)
     {
         $validated = $this->validatePayload($request);
+        $this->ensureProductAccess($request, null, (int) $validated['brand_id']);
         $this->assertCategoryHierarchy(
             (int) $validated['cat_l1_id'],
             (int) $validated['cat_l2_id'],
@@ -66,6 +70,7 @@ class ProductSkuController extends Controller
     public function update(Request $request, ProductSku $productSku)
     {
         $validated = $this->validatePayload($request, $productSku);
+        $this->ensureProductAccess($request, $productSku, (int) $validated['brand_id']);
         $this->assertCategoryHierarchy(
             (int) $validated['cat_l1_id'],
             (int) $validated['cat_l2_id'],
@@ -114,8 +119,10 @@ class ProductSkuController extends Controller
         ]);
     }
 
-    public function destroy(ProductSku $productSku)
+    public function destroy(Request $request, ProductSku $productSku)
     {
+        $this->ensureProductAccess($request, $productSku, null);
+
         $deletedId = $productSku->id;
         if ($productSku->image_url) {
             $this->deleteImageFile($productSku->image_url);
@@ -325,5 +332,53 @@ class ProductSkuController extends Controller
                 'message' => $e->getMessage(),
             ]);
         }
+    }
+
+    private function ensureProductAccess(Request $request, ?ProductSku $productSku, ?int $targetBrandId): void
+    {
+        if ($this->isSuperAdmin($request)) {
+            return;
+        }
+
+        if (!$this->isBrandOwner($request)) {
+            abort(403, 'Akses ditolak.');
+        }
+
+        $ownedBrandIds = $this->ownedBrandIdsForCurrentUser();
+        if ($ownedBrandIds === []) {
+            abort(403, 'Anda belum memiliki brand yang dapat dikelola.');
+        }
+
+        if ($targetBrandId !== null && !in_array($targetBrandId, $ownedBrandIds, true)) {
+            abort(403, 'Anda hanya dapat mengelola SKU dari brand milik Anda sendiri.');
+        }
+
+        if ($productSku !== null && !in_array((int) $productSku->brand_id, $ownedBrandIds, true)) {
+            abort(403, 'Anda hanya dapat mengelola SKU dari brand milik Anda sendiri.');
+        }
+    }
+
+    private function ownedBrandIdsForCurrentUser(): array
+    {
+        $userName = trim((string) (Auth::user()?->name ?? ''));
+        if ($userName === '' || !Schema::hasTable('brands')) {
+            return [];
+        }
+
+        return Brand::query()
+            ->where('owner_name', $userName)
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+    }
+
+    private function isSuperAdmin(Request $request): bool
+    {
+        return trim((string) ($request->user()?->role ?? '')) === 'Super Admin';
+    }
+
+    private function isBrandOwner(Request $request): bool
+    {
+        return trim((string) ($request->user()?->role ?? '')) === 'Brand Owner';
     }
 }

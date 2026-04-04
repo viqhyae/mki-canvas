@@ -13,6 +13,8 @@ class UserManagementController extends Controller
 {
     public function store(Request $request)
     {
+        $this->ensureSuperAdminAccess($request);
+
         $validated = $request->validate([
             'name' => 'required|string|max:255',
             'email' => 'required|string|email|max:255|unique:users,email',
@@ -36,6 +38,8 @@ class UserManagementController extends Controller
 
     public function update(Request $request, User $user)
     {
+        $this->ensureSuperAdminAccess($request);
+
         $oldName = trim((string) $user->name);
         $oldRole = (string) ($user->role ?? 'Brand Owner');
 
@@ -88,6 +92,8 @@ class UserManagementController extends Controller
 
     public function updateStatus(Request $request, User $user)
     {
+        $this->ensureSuperAdminAccess($request);
+
         $validated = $request->validate([
             'status' => 'required|integer|in:0,1',
         ]);
@@ -118,8 +124,10 @@ class UserManagementController extends Controller
         ]);
     }
 
-    public function destroy(User $user)
+    public function destroy(Request $request, User $user)
     {
+        $this->ensureSuperAdminAccess($request);
+
         if (Auth::id() === $user->id) {
             return response()->json([
                 'errors' => [
@@ -149,6 +157,8 @@ class UserManagementController extends Controller
 
     public function resetPassword(Request $request, User $user)
     {
+        $this->ensureSuperAdminAccess($request);
+
         $validated = $request->validate([
             'password' => 'required|string|min:8|max:255|confirmed',
         ]);
@@ -237,5 +247,15 @@ class UserManagementController extends Controller
             'role' => $user->role,
             'status' => (int) $user->status,
         ];
+    }
+
+    private function ensureSuperAdminAccess(Request $request): void
+    {
+        $role = trim((string) ($request->user()?->role ?? ''));
+        if ($role === 'Super Admin') {
+            return;
+        }
+
+        abort(403, 'Akses ditolak. Fitur manajemen pengguna hanya untuk Super Admin.');
     }
 }

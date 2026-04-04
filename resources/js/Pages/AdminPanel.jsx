@@ -31,6 +31,7 @@ export default function AdminPanel({
     databaseTagBatches,
     databaseProducts,
     databaseScanLogs,
+    securitySettings,
 }) {
     const authUser = usePage().props?.auth?.user || null;
     const [activeTab, setActiveTab] = useState('dashboard');
@@ -98,7 +99,7 @@ export default function AdminPanel({
             case 'categories': return 'Kategori Produk';
             case 'product': return 'SKU Produk';
             case 'product_form': return editingProductId ? 'Edit SKU Produk' : 'Tambah SKU Baru';
-            case 'tags': return 'Generate Tag/QR';
+            case 'tags': return 'Tag/QR Code';
             case 'users': return 'Users & Roles';
             case 'settings': return 'Pengaturan';
             default: return 'Dashboard';
@@ -501,6 +502,8 @@ export default function AdminPanel({
     const sidebarUserName = (matchedSystemUser?.name || authUser?.name || 'Pengguna').trim() || 'Pengguna';
     const sidebarUserRole = normalizeUserRole(matchedSystemUser?.role || authUser?.role);
     const sidebarUserInitials = getUserInitials(sidebarUserName);
+    const isBrandOwnerRole = sidebarUserRole === 'Brand Owner';
+    const isSuperAdminRole = sidebarUserRole === 'Super Admin';
     const isActiveSuperAdminUser = (user) => (
         normalizeUserRole(user?.role) === 'Super Admin' &&
         normalizeUserStatus(user?.status) === 1
@@ -567,8 +570,36 @@ export default function AdminPanel({
     const [isSavingCategory, setIsSavingCategory] = useState(false);
 
     // --- STATE PENGATURAN ---
-    const [requireGps, setRequireGps] = useState(true);
-    const [emailNotif, setEmailNotif] = useState(false);
+    const normalizeBooleanSetting = (value, fallback) => {
+        if (value === undefined || value === null) return fallback;
+        if (typeof value === 'boolean') return value;
+        const normalized = String(value).trim().toLowerCase();
+        return ['1', 'true', 'yes', 'on'].includes(normalized);
+    };
+    const normalizeScanLimitSetting = (value, fallback = 5) => {
+        const parsed = Number(value);
+        if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+        return Math.floor(parsed);
+    };
+
+    const [scanValidLimit, setScanValidLimit] = useState(
+        normalizeScanLimitSetting(securitySettings?.maxValidScanLimit, 5)
+    );
+    const [requireGps, setRequireGps] = useState(
+        normalizeBooleanSetting(securitySettings?.requireGps, true)
+    );
+    const [emailNotif, setEmailNotif] = useState(
+        normalizeBooleanSetting(securitySettings?.emailNotif, false)
+    );
+    const [isSavingSecuritySettings, setIsSavingSecuritySettings] = useState(false);
+    const [accountEmailInput, setAccountEmailInput] = useState(String(authUser?.email || ''));
+    const [isSavingAccountEmail, setIsSavingAccountEmail] = useState(false);
+    const [accountPasswordInput, setAccountPasswordInput] = useState({
+        currentPassword: '',
+        newPassword: '',
+        confirmPassword: '',
+    });
+    const [isSavingAccountPassword, setIsSavingAccountPassword] = useState(false);
 
     // --- STATE UNTUK FILTER SCAN ---
     const [statusFilter, setStatusFilter] = useState('Semua Status');
@@ -651,6 +682,26 @@ export default function AdminPanel({
     }, [databaseScanLogs]);
 
     useEffect(() => {
+        setScanValidLimit(normalizeScanLimitSetting(securitySettings?.maxValidScanLimit, 5));
+        setRequireGps(normalizeBooleanSetting(securitySettings?.requireGps, true));
+        setEmailNotif(normalizeBooleanSetting(securitySettings?.emailNotif, false));
+    }, [securitySettings]);
+
+    useEffect(() => {
+        setAccountEmailInput(String(authUser?.email || ''));
+    }, [authUser?.email]);
+
+    useEffect(() => {
+        if (!isBrandOwnerRole) {
+            return;
+        }
+
+        if (activeTab === 'users') {
+            setActiveTab('dashboard');
+        }
+    }, [activeTab, isBrandOwnerRole]);
+
+    useEffect(() => {
         if (activeTab !== 'scan_history') {
             return;
         }
@@ -694,6 +745,81 @@ export default function AdminPanel({
             releaseProductImagePreviewObjectUrl();
         };
     }, []);
+
+    const handleSaveSecuritySettings = () => {
+        const normalizedLimit = normalizeScanLimitSetting(scanValidLimit, 5);
+        setIsSavingSecuritySettings(true);
+
+        axios.post('/settings/security', {
+            max_valid_scan_limit: normalizedLimit,
+            require_gps: Boolean(requireGps),
+            email_notif: Boolean(emailNotif),
+        })
+            .then((response) => {
+                const savedSettings = response?.data?.settings || {};
+                setScanValidLimit(normalizeScanLimitSetting(savedSettings.maxValidScanLimit, normalizedLimit));
+                setRequireGps(normalizeBooleanSetting(savedSettings.requireGps, Boolean(requireGps)));
+                setEmailNotif(normalizeBooleanSetting(savedSettings.emailNotif, Boolean(emailNotif)));
+                showToast('Pengaturan keamanan berhasil disimpan.');
+            })
+            .catch((error) => {
+                const errors = error?.response?.data?.errors || {};
+                showToast(getFirstErrorMessage(errors, 'Gagal menyimpan pengaturan keamanan.'), 'error');
+            })
+            .finally(() => {
+                setIsSavingSecuritySettings(false);
+            });
+    };
+
+    const handleSaveAccountEmail = () => {
+        const cleanedEmail = String(accountEmailInput || '').trim().toLowerCase();
+        if (cleanedEmail === '') {
+            showToast('Email wajib diisi.', 'error');
+            return;
+        }
+
+        setIsSavingAccountEmail(true);
+        axios.post('/settings/account/email', {
+            email: cleanedEmail,
+        })
+            .then(() => {
+                setAccountEmailInput(cleanedEmail);
+                showToast('Email akun berhasil diperbarui.');
+            })
+            .catch((error) => {
+                const errors = error?.response?.data?.errors || {};
+                showToast(getFirstErrorMessage(errors, 'Gagal memperbarui email akun.'), 'error');
+            })
+            .finally(() => {
+                setIsSavingAccountEmail(false);
+            });
+    };
+
+    const handleSaveAccountPassword = () => {
+        if (isSavingAccountPassword) return;
+
+        setIsSavingAccountPassword(true);
+        axios.post('/settings/account/password', {
+            current_password: accountPasswordInput.currentPassword,
+            password: accountPasswordInput.newPassword,
+            password_confirmation: accountPasswordInput.confirmPassword,
+        })
+            .then(() => {
+                setAccountPasswordInput({
+                    currentPassword: '',
+                    newPassword: '',
+                    confirmPassword: '',
+                });
+                showToast('Password akun berhasil diperbarui.');
+            })
+            .catch((error) => {
+                const errors = error?.response?.data?.errors || {};
+                showToast(getFirstErrorMessage(errors, 'Gagal memperbarui password akun.'), 'error');
+            })
+            .finally(() => {
+                setIsSavingAccountPassword(false);
+            });
+    };
 
     // --- LOGIC HANDLERS BRAND ---
     const [isSavingBrand, setIsSavingBrand] = useState(false);
@@ -1802,11 +1928,31 @@ export default function AdminPanel({
         setRequireGps,
         emailNotif,
         setEmailNotif,
+        scanValidLimit,
+        setScanValidLimit,
+        isSavingSecuritySettings,
+        handleSaveSecuritySettings,
         scanLogs,
         statusFilter,
         setStatusFilter,
         isRefreshingScanLogs,
+        isBrandOwnerRole,
+        isSuperAdminRole,
+        authUser,
+        accountEmailInput,
+        setAccountEmailInput,
+        isSavingAccountEmail,
+        handleSaveAccountEmail,
+        accountPasswordInput,
+        setAccountPasswordInput,
+        isSavingAccountPassword,
+        handleSaveAccountPassword,
     });
+
+    const masterDataItems = MASTER_DATA_ITEMS.map((item) =>
+        item.id === 'tags' ? { ...item, label: 'Tag/QR Code' } : item
+    );
+    const systemItems = SYSTEM_ITEMS.filter((item) => !(isBrandOwnerRole && item.id === 'users'));
 
     const SidebarItem = ({ icon: Icon, label, id, isSub = false }) => (
         <Tooltip text={isSidebarMinimized ? label : ""} position="right" wrapperClass={`w-full ${isSidebarMinimized ? 'flex justify-center' : ''}`}>
@@ -1860,7 +2006,7 @@ export default function AdminPanel({
                     />
                     <div className="pt-2">
                         {!isSidebarMinimized && <p className="px-3 text-xs font-bold uppercase text-slate-400 mb-2">Master Data</p>}
-                        {MASTER_DATA_ITEMS.map((item) => (
+                        {masterDataItems.map((item) => (
                             <SidebarItem
                                 key={item.id}
                                 icon={item.icon}
@@ -1871,7 +2017,7 @@ export default function AdminPanel({
                         ))}
                     </div>
                     <div className="pt-2">
-                        {SYSTEM_ITEMS.map((item) => (
+                        {systemItems.map((item) => (
                             <SidebarItem
                                 key={item.id}
                                 icon={item.icon}

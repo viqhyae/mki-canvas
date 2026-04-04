@@ -2,6 +2,7 @@ import React from 'react';
 import {
     Building2,
     CheckCircle2,
+    Eye,
     Edit,
     Filter,
     Image as ImageIcon,
@@ -31,6 +32,7 @@ export default function createBrandManager(context) {
         isBrandActive,
         isBrandModalOpen,
         isSavingBrand,
+        isBrandOwnerRole,
         isUserActive,
         logoPreview,
         markBrandLogoBroken,
@@ -51,6 +53,7 @@ export default function createBrandManager(context) {
         Tooltip,
     } = context;
     const BrandManager = () => {
+        const [previewBrand, setPreviewBrand] = React.useState(null);
         const searchQuery = globalSearch.toLowerCase().trim();
         const productCountByBrandId = {};
 
@@ -97,12 +100,14 @@ export default function createBrandManager(context) {
                     <div className="flex items-center gap-3">
                         <span className="text-sm font-medium text-slate-500">Total: {filteredBrands.length} Brand Terdaftar</span>
                     </div>
-                    <button
-                        onClick={openCreateBrandModal}
-                        className="bg-[#C1986E] hover:bg-[#A37E58] text-white px-5 py-2.5 rounded-lg font-medium transition-all shadow-sm active:scale-95 text-sm flex items-center justify-center gap-2"
-                    >
-                        <Plus size={16} /> Tambah Brand Baru
-                    </button>
+                    {!isBrandOwnerRole && (
+                        <button
+                            onClick={openCreateBrandModal}
+                            className="bg-[#C1986E] hover:bg-[#A37E58] text-white px-5 py-2.5 rounded-lg font-medium transition-all shadow-sm active:scale-95 text-sm flex items-center justify-center gap-2"
+                        >
+                            <Plus size={16} /> Tambah Brand Baru
+                        </button>
+                    )}
                 </div>
 
                 <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-x-auto [scrollbar-gutter:stable]">
@@ -186,29 +191,42 @@ export default function createBrandManager(context) {
                                             </td>
                                             <td className="px-6 py-4 text-center">
                                                 <div className="flex items-center justify-center gap-2">
-                                                    <Tooltip text={isBrandActive(brand.status) ? "Nonaktifkan Brand" : "Aktifkan Brand"} position="top">
-                                                        <ToggleSwitch
-                                                            checked={isBrandActive(brand.status)}
-                                                            disabled={savingBrandStatusId === brand.id}
-                                                            onChange={() => toggleBrandStatusAutoSave(brand)}
-                                                        />
-                                                    </Tooltip>
-                                                    <Tooltip text="Edit Brand" position="top">
-                                                        <button
-                                                            onClick={() => handleEditBrand(brand)}
-                                                            className="text-slate-400 hover:text-[#C1986E] hover:bg-[#C1986E]/10 transition-all p-1.5 rounded-lg active:scale-95"
-                                                        >
-                                                            <Edit size={16} />
-                                                        </button>
-                                                    </Tooltip>
-                                                    <Tooltip text="Hapus Brand" position="top">
-                                                        <button
-                                                            onClick={() => handleDeleteBrand(brand.id)}
-                                                            className="text-slate-400 hover:text-red-500 hover:bg-red-50 transition-all p-1.5 rounded-lg active:scale-95"
-                                                        >
-                                                            <Trash2 size={16} />
-                                                        </button>
-                                                    </Tooltip>
+                                                    {isBrandOwnerRole ? (
+                                                        <Tooltip text="Preview Brand" position="top">
+                                                            <button
+                                                                onClick={() => setPreviewBrand(brand)}
+                                                                className="text-slate-400 hover:text-blue-500 hover:bg-blue-50 transition-all p-1.5 rounded-lg active:scale-95"
+                                                            >
+                                                                <Eye size={16} />
+                                                            </button>
+                                                        </Tooltip>
+                                                    ) : (
+                                                        <>
+                                                            <Tooltip text={isBrandActive(brand.status) ? "Nonaktifkan Brand" : "Aktifkan Brand"} position="top">
+                                                                <ToggleSwitch
+                                                                    checked={isBrandActive(brand.status)}
+                                                                    disabled={savingBrandStatusId === brand.id}
+                                                                    onChange={() => toggleBrandStatusAutoSave(brand)}
+                                                                />
+                                                            </Tooltip>
+                                                            <Tooltip text="Edit Brand" position="top">
+                                                                <button
+                                                                    onClick={() => handleEditBrand(brand)}
+                                                                    className="text-slate-400 hover:text-[#C1986E] hover:bg-[#C1986E]/10 transition-all p-1.5 rounded-lg active:scale-95"
+                                                                >
+                                                                    <Edit size={16} />
+                                                                </button>
+                                                            </Tooltip>
+                                                            <Tooltip text="Hapus Brand" position="top">
+                                                                <button
+                                                                    onClick={() => handleDeleteBrand(brand.id)}
+                                                                    className="text-slate-400 hover:text-red-500 hover:bg-red-50 transition-all p-1.5 rounded-lg active:scale-95"
+                                                                >
+                                                                    <Trash2 size={16} />
+                                                                </button>
+                                                            </Tooltip>
+                                                        </>
+                                                    )}
                                                 </div>
                                             </td>
                                         </tr>
@@ -218,6 +236,60 @@ export default function createBrandManager(context) {
                         </tbody>
                     </table>
                 </div>
+
+                {previewBrand && (
+                    <div
+                        className="fixed inset-0 z-[110] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
+                        onClick={() => setPreviewBrand(null)}
+                    >
+                        <div
+                            className="bg-white rounded-2xl shadow-xl w-full max-w-lg overflow-hidden animate-in zoom-in-95 duration-200 flex flex-col"
+                            onClick={(event) => event.stopPropagation()}
+                        >
+                            <div className="bg-slate-50 border-b border-slate-100 p-4 px-6 flex justify-between items-center">
+                                <h3 className="font-bold text-slate-800 flex items-center gap-2">
+                                    <Eye size={18} className="text-[#C1986E]" /> Preview Brand
+                                </h3>
+                                <button
+                                    onClick={() => setPreviewBrand(null)}
+                                    className="text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-all p-1.5 rounded-lg active:scale-95"
+                                >
+                                    <X size={18} />
+                                </button>
+                            </div>
+                            <div className="p-6 space-y-4 text-sm">
+                                <div>
+                                    <p className="text-xs uppercase tracking-wide text-slate-400 font-bold mb-1">Nama Brand</p>
+                                    <p className="font-semibold text-slate-800">{previewBrand.name}</p>
+                                </div>
+                                <div>
+                                    <p className="text-xs uppercase tracking-wide text-slate-400 font-bold mb-1">Kode Brand</p>
+                                    <p className="font-mono text-slate-700">{previewBrand.brand_code || `ID-${previewBrand.id}`}</p>
+                                </div>
+                                <div>
+                                    <p className="text-xs uppercase tracking-wide text-slate-400 font-bold mb-1">Pemilik</p>
+                                    <p className="text-slate-700">{previewBrand.owner_name || 'Belum ditetapkan'}</p>
+                                </div>
+                                <div>
+                                    <p className="text-xs uppercase tracking-wide text-slate-400 font-bold mb-1">Status</p>
+                                    <p className="text-slate-700">{isBrandActive(previewBrand.status) ? 'Aktif' : 'Non-aktif'}</p>
+                                </div>
+                                <div>
+                                    <p className="text-xs uppercase tracking-wide text-slate-400 font-bold mb-1">Deskripsi</p>
+                                    <p className="text-slate-700 whitespace-pre-line">{previewBrand.description || '-'}</p>
+                                </div>
+                            </div>
+                            <div className="bg-slate-50 border-t border-slate-100 p-4 px-6 flex justify-end">
+                                <button
+                                    onClick={() => setPreviewBrand(null)}
+                                    className="px-6 py-2.5 rounded-lg font-medium text-white bg-slate-800 hover:bg-slate-700 transition-all active:scale-95 text-sm"
+                                >
+                                    Tutup
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
 
                 {/* Modal Tambah/Edit Brand */}
                 {isBrandModalOpen && (

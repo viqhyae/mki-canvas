@@ -9,6 +9,8 @@ class CategoryController extends Controller
 {
     public function store(Request $request)
     {
+        $this->ensureSuperAdminAccess($request);
+
         $data = $request->validate([
             'name' => 'required|string|max:255',
             'parent_id' => 'nullable|integer|exists:product_categories,id',
@@ -53,8 +55,10 @@ class CategoryController extends Controller
         ], 201);
     }
 
-    public function destroy(ProductCategory $productCategory)
+    public function destroy(Request $request, ProductCategory $productCategory)
     {
+        $this->ensureSuperAdminAccess($request);
+
         $deletedId = $productCategory->id;
         $deletedLevel = $productCategory->level;
         $productCategory->delete();
@@ -63,5 +67,15 @@ class CategoryController extends Controller
             'deleted_id' => $deletedId,
             'deleted_level' => $deletedLevel,
         ]);
+    }
+
+    private function ensureSuperAdminAccess(Request $request): void
+    {
+        $role = trim((string) ($request->user()?->role ?? ''));
+        if ($role === 'Super Admin') {
+            return;
+        }
+
+        abort(403, 'Akses ditolak. Fitur kategori hanya untuk Super Admin.');
     }
 }

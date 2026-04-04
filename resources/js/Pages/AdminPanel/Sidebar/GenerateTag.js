@@ -2,10 +2,9 @@ import { QrCode } from 'lucide-react';
 
 const generateTagItem = {
     id: 'tags',
-    label: 'Generate Tag/QR',
+    label: 'Tag/QR Code',
     icon: QrCode,
     isSub: true,
 };
 
 export default generateTagItem;
-

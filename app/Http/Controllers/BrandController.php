@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\AppSetting;
 use App\Models\Brand;
 use App\Models\ProductCategory;
 use App\Models\ProductSku;
@@ -11,6 +12,7 @@ use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
 use Inertia\Inertia;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
@@ -19,11 +21,21 @@ use Illuminate\Support\Str;
 
 class BrandController extends Controller {
     public function index() {
+        $authUser = Auth::user();
+        $isBrandOwner = $this->isBrandOwnerUser($authUser);
+        $ownedBrandIds = $isBrandOwner ? $this->ownedBrandIdsForUser($authUser?->name) : [];
+        $ownedBrandNames = $isBrandOwner ? $this->ownedBrandNamesByIds($ownedBrandIds) : [];
+
         $databaseCategories = [];
         $databaseProducts = [];
         $databaseScanLogs = [];
         $databaseUsers = [];
         $databaseTagBatches = [];
+        $securitySettings = [
+            'maxValidScanLimit' => 5,
+            'requireGps' => true,
+            'emailNotif' => false,
+        ];
 
         if (Schema::hasTable('product_categories')) {
             $databaseCategories = ProductCategory::query()
@@ -62,33 +74,52 @@ class BrandController extends Controller {
         }
 
         if (Schema::hasTable('users')) {
-            $userQuery = User::query()->select(['id', 'name', 'email']);
+            if ($isBrandOwner && $authUser) {
+                $databaseUsers = [[
+                    'id' => $authUser->id,
+                    'name' => $authUser->name,
+                    'email' => $authUser->email,
+                    'role' => $authUser->role ?? 'Brand Owner',
+                    'status' => (int) ($authUser->status ?? 1),
+                ]];
+            } else {
+                $userQuery = User::query()->select(['id', 'name', 'email']);
 
-            if (Schema::hasColumn('users', 'role')) {
-                $userQuery->addSelect('role');
+                if (Schema::hasColumn('users', 'role')) {
+                    $userQuery->addSelect('role');
+                }
+
+                if (Schema::hasColumn('users', 'status')) {
+                    $userQuery->addSelect('status');
+                }
+
+                $databaseUsers = $userQuery
+                    ->latest('id')
+                    ->get()
+                    ->map(function (User $user) {
+                        return [
+                            'id' => $user->id,
+                            'name' => $user->name,
+                            'email' => $user->email,
+                            'role' => $user->role ?? 'Brand Owner',
+                            'status' => (int) ($user->status ?? 1),
+                        ];
+                    })
+                    ->all();
             }
-
-            if (Schema::hasColumn('users', 'status')) {
-                $userQuery->addSelect('status');
-            }
-
-            $databaseUsers = $userQuery
-                ->latest('id')
-                ->get()
-                ->map(function (User $user) {
-                    return [
-                        'id' => $user->id,
-                        'name' => $user->name,
-                        'email' => $user->email,
-                        'role' => $user->role ?? 'Brand Owner',
-                        'status' => (int) ($user->status ?? 1),
-                    ];
-                })
-                ->all();
         }
 
         if (Schema::hasTable('tag_batches')) {
-            $databaseTagBatches = TagBatch::query()
+            $tagBatchQuery = TagBatch::query();
+            if ($isBrandOwner) {
+                if ($ownedBrandNames === []) {
+                    $tagBatchQuery->whereRaw('1 = 0');
+                } else {
+                    $tagBatchQuery->whereIn('brand_name', $ownedBrandNames);
+                }
+            }
+
+            $databaseTagBatches = $tagBatchQuery
                 ->latest('id')
                 ->get()
                 ->map(fn (TagBatch $tagBatch) => $this->tagBatchPayload($tagBatch))
@@ -96,8 +127,18 @@ class BrandController extends Controller {
         }
 
         if (Schema::hasTable('product_skus')) {
-            $databaseProducts = ProductSku::query()
-                ->with(['brand', 'categoryL1', 'categoryL2', 'categoryL3'])
+            $productQuery = ProductSku::query()
+                ->with(['brand', 'categoryL1', 'categoryL2', 'categoryL3']);
+
+            if ($isBrandOwner) {
+                if ($ownedBrandIds === []) {
+                    $productQuery->whereRaw('1 = 0');
+                } else {
+                    $productQuery->whereIn('brand_id', $ownedBrandIds);
+                }
+            }
+
+            $databaseProducts = $productQuery
                 ->latest('id')
                 ->get()
                 ->map(fn (ProductSku $productSku) => $this->productPayload($productSku))
@@ -105,7 +146,16 @@ class BrandController extends Controller {
         }
 
         if (Schema::hasTable('scan_activities')) {
-            $databaseScanLogs = ScanActivity::query()
+            $scanQuery = ScanActivity::query();
+            if ($isBrandOwner) {
+                if ($ownedBrandNames === []) {
+                    $scanQuery->whereRaw('1 = 0');
+                } else {
+                    $scanQuery->whereIn('brand_name', $ownedBrandNames);
+                }
+            }
+
+            $databaseScanLogs = $scanQuery
                 ->latest('id')
                 ->limit(500)
                 ->get()
@@ -113,8 +163,27 @@ class BrandController extends Controller {
                 ->all();
         }
 
+        if (Schema::hasTable('app_settings')) {
+            $settingMap = AppSetting::query()
+                ->whereIn('key', ['max_valid_scan_limit', 'require_gps', 'email_notif'])
+                ->pluck('value', 'key');
+
+            $maxValidScanLimit = (int) ($settingMap['max_valid_scan_limit'] ?? 5);
+            $securitySettings = [
+                'maxValidScanLimit' => $maxValidScanLimit > 0 ? $maxValidScanLimit : 5,
+                'requireGps' => $this->toBoolSetting($settingMap['require_gps'] ?? '1'),
+                'emailNotif' => $this->toBoolSetting($settingMap['email_notif'] ?? '0'),
+            ];
+        }
+
+        $brandQuery = Brand::query();
+        if ($isBrandOwner) {
+            $ownerName = trim((string) ($authUser?->name ?? ''));
+            $brandQuery->where('owner_name', $ownerName);
+        }
+
         return Inertia::render('AdminPanel', [
-            'databaseBrands' => Brand::query()
+            'databaseBrands' => $brandQuery
                 ->latest('id')
                 ->get()
                 ->map(fn (Brand $brand) => $this->brandPayload($brand))
@@ -124,10 +193,13 @@ class BrandController extends Controller {
             'databaseScanLogs' => $databaseScanLogs,
             'databaseUsers' => $databaseUsers,
             'databaseTagBatches' => $databaseTagBatches,
+            'securitySettings' => $securitySettings,
         ]);
     }
 
     public function store(Request $request) {
+        $this->ensureSuperAdminAccess($request);
+
         $data = $request->validate([
             'name' => 'required|string|max:255',
             'brand_code' => 'required|string|unique:brands',
@@ -175,6 +247,8 @@ class BrandController extends Controller {
     }
 
     public function update(Request $request, Brand $brand) {
+        $this->ensureSuperAdminAccess($request);
+
         $data = $request->validate([
             'name' => 'required|string|max:255',
             'owner_name' => 'nullable|string',
@@ -227,6 +301,8 @@ class BrandController extends Controller {
 
     public function updateStatus(Request $request, Brand $brand)
     {
+        $this->ensureSuperAdminAccess($request);
+
         $validated = $request->validate([
             'status' => 'required|integer|in:0,1',
         ]);
@@ -240,7 +316,9 @@ class BrandController extends Controller {
         ]);
     }
 
-    public function destroy(Brand $brand) {
+    public function destroy(Request $request, Brand $brand) {
+        $this->ensureSuperAdminAccess($request);
+
         $deletedId = $brand->id;
 
         if ($brand->logo_url) $this->deleteLogoFile($brand->logo_url);
@@ -372,6 +450,57 @@ class BrandController extends Controller {
         }
 
         return $path !== '' ? $path : null;
+    }
+
+    private function toBoolSetting(mixed $value): bool
+    {
+        $normalized = strtolower(trim((string) $value));
+        return in_array($normalized, ['1', 'true', 'yes', 'on'], true);
+    }
+
+    private function ensureSuperAdminAccess(Request $request): void
+    {
+        $role = trim((string) ($request->user()?->role ?? ''));
+        if ($role === 'Super Admin') {
+            return;
+        }
+
+        abort(403, 'Akses ditolak. Fitur ini hanya untuk Super Admin.');
+    }
+
+    private function isBrandOwnerUser(?User $user): bool
+    {
+        return trim((string) ($user?->role ?? '')) === 'Brand Owner';
+    }
+
+    private function ownedBrandIdsForUser(?string $ownerName): array
+    {
+        $name = trim((string) ($ownerName ?? ''));
+        if ($name === '' || !Schema::hasTable('brands')) {
+            return [];
+        }
+
+        return Brand::query()
+            ->where('owner_name', $name)
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+    }
+
+    private function ownedBrandNamesByIds(array $brandIds): array
+    {
+        if ($brandIds === [] || !Schema::hasTable('brands')) {
+            return [];
+        }
+
+        return Brand::query()
+            ->whereIn('id', $brandIds)
+            ->pluck('name')
+            ->map(fn ($name) => trim((string) $name))
+            ->filter(fn ($name) => $name !== '')
+            ->unique()
+            ->values()
+            ->all();
     }
 
     private function storeLogoFile(UploadedFile $logoFile): ?string

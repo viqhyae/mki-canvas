@@ -2,7 +2,6 @@ import React from 'react';
 import {
     Activity,
     AlertCircle,
-    ArrowRight,
     CheckCircle2,
     Clock,
     Download,
@@ -22,7 +21,6 @@ export default function createScanHistory(context) {
         setStatusFilter,
         SortIcon,
         statusFilter,
-        Tooltip,
     } = context;
 
     const ScanHistory = () => {
@@ -73,9 +71,15 @@ export default function createScanHistory(context) {
             const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
             const url = URL.createObjectURL(blob);
             const link = document.createElement('a');
+            const wibDate = new Intl.DateTimeFormat('en-CA', {
+                timeZone: 'Asia/Jakarta',
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+            }).format(new Date());
 
             link.href = url;
-            link.setAttribute('download', `scan-activities-${new Date().toISOString().slice(0, 10)}.csv`);
+            link.setAttribute('download', `scan-activities-${wibDate}.csv`);
             document.body.appendChild(link);
             link.click();
             link.remove();
@@ -110,11 +114,10 @@ export default function createScanHistory(context) {
                                 onChange={(event) => setStatusFilter(event.target.value)}
                             >
                                 <option value="Semua Status">Semua Status</option>
-                                <option value="Original">Original (Aman)</option>
-                                <option value="Peringatan">Peringatan (Scan Berulang)</option>
-                                <option value="Indikasi Palsu">Indikasi Palsu</option>
-                                <option value="Suspended">Tag Ditangguhkan</option>
-                                <option value="Invalid">Tag Invalid / Tidak Dikenal</option>
+                                <option value="Original">Terverifikasi Asli</option>
+                                <option value="Peringatan">Peringatan Keamanan</option>
+                                <option value="Suspended">Tag Ditarik (Recall)</option>
+                                <option value="Invalid">Tag Tidak Dikenal</option>
                             </select>
                         </div>
                         <button
@@ -139,13 +142,12 @@ export default function createScanHistory(context) {
                                 <th className="px-6 py-4 font-semibold text-slate-600 text-sm cursor-pointer hover:bg-slate-100 transition-colors group select-none" onClick={() => handleSortChange('status', scanSort, setScanSort)}>
                                     <div className="flex items-center gap-2">Status Analitik <SortIcon columnKey="status" sortConfig={scanSort} /></div>
                                 </th>
-                                <th className="px-6 py-4 font-semibold text-slate-600 text-sm text-center">Detail</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
                             {processedLogs.length === 0 ? (
                                 <tr>
-                                    <td colSpan="4" className="text-center py-10 text-slate-400 text-sm">
+                                    <td colSpan="3" className="text-center py-10 text-slate-400 text-sm">
                                         Belum ada aktivitas scan yang tercatat.
                                     </td>
                                 </tr>
@@ -182,7 +184,7 @@ export default function createScanHistory(context) {
                                                 )}
                                                 {(log.status === 'Indikasi Palsu' || log.status === 'Invalid' || log.status === 'Suspended') && (
                                                     <span className="bg-red-50 text-red-700 text-xs px-2.5 py-1 rounded-md font-semibold flex items-center gap-1.5 border border-red-200 shadow-sm">
-                                                        <X size={12} /> {log.status === 'Suspended' ? 'Tag Ditarik (Recall)' : (log.status === 'Invalid' ? 'Tag Tidak Dikenal' : 'Indikasi Dipalsukan')}
+                                                        <X size={12} /> {log.status === 'Suspended' ? 'Tag Ditarik (Recall)' : (log.status === 'Invalid' ? 'Tag Tidak Dikenal' : 'Indikasi Dipalsukan (Data Lama)')}
                                                     </span>
                                                 )}
 
@@ -192,13 +194,6 @@ export default function createScanHistory(context) {
                                                     </span>
                                                 )}
                                             </div>
-                                        </td>
-                                        <td className="px-6 py-4 text-center">
-                                            <Tooltip text={log.userAgent || '-'} position="left">
-                                                <button className="text-slate-400 hover:text-blue-600 hover:bg-blue-50 p-2 rounded-lg transition-colors active:scale-95">
-                                                    <ArrowRight size={16} />
-                                                </button>
-                                            </Tooltip>
                                         </td>
                                     </tr>
                                 ))
